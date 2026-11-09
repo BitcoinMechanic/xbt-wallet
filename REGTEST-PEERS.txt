@@ -1,0 +1,11 @@
+Addresses from inside the Android emulator
+
+Chain sync (already configured): 10.0.2.2:19444
+Lightning channel peer: 02a2aee06c7a4e0105046bcf82179c4c3e86926b6df1e78eae35baed1b8d07599b@10.0.2.2:19735
+
+Peer alias: XBT Alpha Test Peer
+Regtest only; no real funds.
+
+Start peer: systemd-run --user --unit=xbt-regtest-peer --collect /home/claude-ubuntu/gpt/native/scripts/run-regtest-peer.sh
+Inspect peer: scripts/peer-cli.sh getinfo
+Mine channel confirmations: scripts/mine-regtest.sh 6

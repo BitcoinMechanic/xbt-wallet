@@ -1,0 +1,157 @@
+diff --git a/chainreg/chainregistry.go b/chainreg/chainregistry.go
+index 6390ad24f..452cb267e 100644
+--- a/chainreg/chainregistry.go
++++ b/chainreg/chainregistry.go
+@@ -765,6 +765,9 @@ func NewPartialChainControl(cfg *Config) (*PartialChainControl, func(), error) {
+ 		cc.FeeEstimator, err = chainfee.NewWebAPIEstimator(
+ 			chainfee.SparseConfFeeSource{
+ 				URL: cfg.Fee.URL,
++				Dial: func(_ string, address string) (net.Conn, error) {
++					return cfg.Dialer(address)
++				},
+ 			},
+ 			!cacheFees,
+ 			cfg.Fee.MinUpdateTimeout,
+diff --git a/lnwallet/chainfee/estimator.go b/lnwallet/chainfee/estimator.go
+index 3e7244583..26bf99c97 100644
+--- a/lnwallet/chainfee/estimator.go
++++ b/lnwallet/chainfee/estimator.go
+@@ -644,6 +644,9 @@ type WebAPIFeeSource interface {
+ type SparseConfFeeSource struct {
+ 	// URL is the fee estimation API specified by the user.
+ 	URL string
++
++	// Dial preserves the node's configured transport, including Tor.
++	Dial func(network, address string) (net.Conn, error)
+ }
+ 
+ // WebAPIResponse is the response returned by the fee estimation API.
+@@ -661,14 +664,43 @@ type WebAPIResponse struct {
+ func (s SparseConfFeeSource) parseResponse(r io.Reader) (
+ 	WebAPIResponse, error) {
+ 
+-	resp := WebAPIResponse{
+-		FeeByBlockTarget: make(map[uint32]uint32),
+-		MinRelayFeerate:  0,
++	var raw json.RawMessage
++	if err := json.NewDecoder(io.LimitReader(r, 65536)).Decode(&raw); err != nil {
++		return WebAPIResponse{}, err
+ 	}
+-	jsonReader := json.NewDecoder(r)
+-	if err := jsonReader.Decode(&resp); err != nil {
++	resp := WebAPIResponse{}
++	if err := json.Unmarshal(raw, &resp); err != nil {
+ 		return WebAPIResponse{}, err
+ 	}
++	if len(resp.FeeByBlockTarget) == 0 {
++		var fees struct {
++			Fastest  *float64 `json:"fastestFee"`
++			HalfHour *float64 `json:"halfHourFee"`
++			Hour     *float64 `json:"hourFee"`
++			Economy  *float64 `json:"economyFee"`
++			Minimum  *float64 `json:"minimumFee"`
++		}
++		if err := json.Unmarshal(raw, &fees); err != nil {
++			return WebAPIResponse{}, err
++		}
++		values := []*float64{fees.Fastest, fees.HalfHour, fees.Hour, fees.Economy, fees.Minimum}
++		converted := make([]uint32, len(values))
++		for i, value := range values {
++			if value == nil || *value <= 0 || math.IsNaN(*value) || math.IsInf(*value, 0) || *value > float64(math.MaxUint32)/1000 {
++				return WebAPIResponse{}, fmt.Errorf("invalid mempool fee response")
++			}
++			converted[i] = uint32(math.Ceil(*value * 1000))
++		}
++		// Mempool API rates are sat/vB; LND expects sat/kvB.
++		// Economy has no precise block target: map it conservatively to 144.
++		for i := 3; i >= 0; i-- {
++			if converted[i] < converted[i+1] {
++				converted[i] = converted[i+1]
++			}
++		}
++		resp.FeeByBlockTarget = map[uint32]uint32{1: converted[0], 3: converted[1], 6: converted[2], 144: converted[3]}
++		resp.MinRelayFeerate = SatPerKVByte(converted[4])
++	}
+ 
+ 	if resp.MinRelayFeerate == 0 {
+ 		log.Errorf("No min relay fee rate available, using default %v",
+@@ -693,8 +725,14 @@ func (s SparseConfFeeSource) GetFeeInfo() (WebAPIResponse, error) {
+ 		}).Dial,
+ 		TLSHandshakeTimeout: WebAPIConnectionTimeout,
+ 	}
++	responseTimeout := WebAPIResponseTimeout
++	if s.Dial != nil {
++		netTransport.Dial = s.Dial
++		netTransport.TLSHandshakeTimeout = 30 * time.Second
++		responseTimeout = 90 * time.Second
++	}
+ 	netClient := &http.Client{
+-		Timeout:   WebAPIResponseTimeout,
++		Timeout:   responseTimeout,
+ 		Transport: netTransport,
+ 	}
+ 
+@@ -708,6 +746,9 @@ func (s SparseConfFeeSource) GetFeeInfo() (WebAPIResponse, error) {
+ 		return WebAPIResponse{}, err
+ 	}
+ 	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return WebAPIResponse{}, fmt.Errorf("fee API returned HTTP %d", resp.StatusCode)
++	}
+ 
+ 	// Once we've obtained the response, we'll instruct the WebAPIFeeSource
+ 	// to parse out the body to obtain our final result.
+diff --git a/lnwallet/chainfee/estimator_test.go b/lnwallet/chainfee/estimator_test.go
+index 3bc8687dc..1def1ac85 100644
+--- a/lnwallet/chainfee/estimator_test.go
++++ b/lnwallet/chainfee/estimator_test.go
+@@ -3,6 +3,10 @@ package chainfee
+ import (
+ 	"bytes"
+ 	"encoding/json"
++	"errors"
++	"net"
++	"net/http"
++	"net/http/httptest"
+ 	"testing"
+ 	"time"
+ 
+@@ -527,3 +531,38 @@ func TestInvalidFeeUpdateTimeout(t *testing.T) {
+ 	require.Error(t, err, "NewWebAPIEstimator should return an error "+
+ 		"when minFeeUpdateTimeout > maxFeeUpdateTimeout")
+ }
++
++// TestFeeSourceUsesConfiguredTransport prevents Tor bypass and direct fallback.
++func TestFeeSourceUsesConfiguredTransport(t *testing.T) {
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		_, _ = w.Write([]byte(`{"fee_by_block_target":{"2":2000},"min_relay_feerate":1000}`))
++	}))
++	defer server.Close()
++	calls := 0
++	source := SparseConfFeeSource{URL: "http://fees.invalid/fees", Dial: func(network, address string) (net.Conn, error) {
++		calls++
++		require.Equal(t, "fees.invalid:80", address)
++		return net.Dial(network, server.Listener.Addr().String())
++	}}
++	_, err := source.GetFeeInfo()
++	require.NoError(t, err)
++	require.Equal(t, 1, calls)
++	source.URL = server.URL
++	source.Dial = func(network, address string) (net.Conn, error) { return nil, errors.New("Tor offline") }
++	_, err = source.GetFeeInfo()
++	require.ErrorContains(t, err, "Tor offline")
++}
++
++func TestMempoolFeeConversion(t *testing.T) {
++	source := SparseConfFeeSource{}
++	result, err := source.parseResponse(bytes.NewBufferString(`{"fastestFee":1,"halfHourFee":0.5,"hourFee":0.001,"economyFee":0.001,"minimumFee":0.001}`))
++	require.NoError(t, err)
++	require.Equal(t, uint32(1000), result.FeeByBlockTarget[1])
++	require.Equal(t, uint32(500), result.FeeByBlockTarget[3])
++	require.Equal(t, uint32(1), result.FeeByBlockTarget[6])
++	require.Equal(t, SatPerKVByte(1), result.MinRelayFeerate)
++	for _, body := range []string{`{}`, `{"fastestFee":1}`, `{"fastestFee":-1,"halfHourFee":1,"hourFee":1,"economyFee":1,"minimumFee":1}`} {
++		_, err := source.parseResponse(bytes.NewBufferString(body))
++		require.Error(t, err)
++	}
++}

@@ -1,0 +1,117 @@
+XBT Android alpha — local development
+
+Use from /home/claude-ubuntu/gpt/native:
+  source scripts/env.sh
+  ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+
+APK: app/build/outputs/apk/debug/app-debug.apk
+Android 8+; arm64-v8a and x86_64; debug-signed, regtest UI only.
+Install with: adb install -r app/build/outputs/apk/debug/app-debug.apk
+
+Embedded backend:
+  .deps/lightning-fork at aa3f4a4e7c1fbad1b291b5acfe83e2b362d2fd56
+  Mobile RPC bindings generated with the fork's `make mobile-rpc` target.
+  Generation modified lnrpc/offersrpc/offers_grpc.pb.go in that checkout.
+  Rebuild AAR: scripts/build-node.sh
+  Go 1.27.3; gomobile/gobind v0.0.0-20261011034528-197770444867
+  JDK 17; Gradle 8.11.1; Android SDK 35; NDK 27.2.12479018
+  Tooling and dependency checkout are local, ignored build inputs.
+
+Regtest smoke test:
+  Use an Android x86_64 emulator with host reachable as 10.0.2.2.
+  Run XBT Knots with a fresh, isolated datadir and:
+    -regtest -testactivationheight=blake2b@1 -blockfilterindex=1
+    -peerblockfilters=1 -port=19444 -rpcport=19443
+    -bind=127.0.0.1:19444 -listenonion=0 -dnsseed=0 -fixedseeds=0
+  Mine regtest blocks before running:
+    ./gradlew :app:connectedDebugAndroidTest
+  This instrumentation test creates a test wallet and address. Use a dedicated
+  emulator; Gradle may uninstall the test app when tests finish.
+
+Runtime limits:
+  No public bootstrap peer/fee service or mainnet onboarding configured.
+  No automatic recommended Lightning peer directory yet.
+  Confirmed deposits only; no incoming mempool detection.
+  Home refreshes every five seconds while visible; deposit-target amount and
+  automatic return-home are unfinished.
+  Confirmed UTXOs only in this first build. Unconfirmed funding remains pending.
+  Channel review shows explicit fee rate, not a complete preflight fee estimate.
+  An uncertain channel submission remains blocked pending manual reconciliation.
+  Payment attempts are persisted and duplicate invoice submissions are blocked.
+  Node payment history is authoritative; no automatic retries after timeouts.
+  No channel backup export/restore, seed import, or lifecycle recovery validation.
+  Hard Mode, provider discovery and cross-chain swaps are not implemented.
+  Physical-device tests and full channel/payment integration tests remain pending.
+  Library notice/dependency inventory review is needed before distribution.
+
+Logs/reports:
+  .tooling/aar-build.log, .tooling/device-test.log, .tooling/validation.log
+  app/build/reports/tests/testDebugUnitTest/index.html
+  app/build/reports/androidTests/connected/debug/index.html
+  app/build/reports/lint-results-debug.html
+
+Validation checkpoint (2026-11-08):
+  APK assembly, three policy tests, and Android lint passed.
+  Android 15 x86_64 emulator instrumentation passed: embedded startup, wallet
+  creation with encrypted seed storage, SERVER_ACTIVE state and deposit address.
+  Neutrino logs confirmed headers/compact-filter sync to regtest height 101.
+  Manual emulator check passed: first-run Easy Mode, create wallet, defer seed
+  backup, generate deposit QR/address, receive 1,000,000 regtest sats, mine one
+  confirmation, restart app, unlock persisted wallet, show confirmed balance
+  and enabled Open Channel. UI showed synced block 103 and one confirmation.
+  Final APK rebuilt after screen-inset/QR sizing fixes; unit tests/lint passed.
+
+Remote Linux viewing (2026-11-08):
+  Debug regtest screens now permit mirroring; seed backup screens and all
+  non-regtest/non-debug screens retain FLAG_SECURE. Build and lint passed;
+  updated APK installed on emulator-5554 and window flags verified.
+  On the client, install scrcpy from its official Linux release. Open an SSH
+  tunnel (keep running):
+    ssh -N -o ExitOnForwardFailure=yes -L 5038:localhost:5037 -L 27183:localhost:27183 claude-ubuntu@192.168.8.19
+  From another client terminal:
+    ADB_SERVER_SOCKET=tcp:localhost:5038 scrcpy --force-adb-forward --serial emulator-5554 --no-audio
+  If using the extracted standalone release, use ./scrcpy instead of scrcpy.
+  ADB remains bound to localhost on the host. No LAN ADB listener is required.
+
+Preferred remote desktop workflow (2026-11-08):
+  Ubuntu 24.04 GNOME desktop was already installed with an active user session.
+  GNOME RDP now listens on 192.168.8.19:3390 with remote input enabled and
+  mirror-primary display mode. User service: gnome-remote-desktop-headless.
+  This uses GNOME's file-backed credentials mode, avoiding an unavailable
+  unlocked desktop keyring; it mirrors the existing GNOME desktop.
+  Remmina username: claude-ubuntu
+  RDP-only password (mode 0600):
+    ~/.local/share/gnome-remote-desktop/remmina-password.txt
+  The password is separate from the Linux account password.
+  Local RDP listener verified; remote client connection remains to be checked.
+  Keep the GNOME session logged in for this desktop-sharing setup.
+  Emulator restarted with GUI and existing test-wallet data preserved.
+  Launcher: ~/.local/share/applications/xbt-alpha.desktop
+  Command: scripts/run-emulator-desktop.sh
+  Running emulator service: systemctl --user status xbt-emulator
+
+Emulator keyboard input (2026-11-08):
+  Enabled hw.keyboard=yes and hw.keyboard.lid=no in xbt-alpha's AVD config.
+  Previous configuration: .tooling/avd-config-before-keyboard.ini.
+  Emulator restarted without wiping wallet/app data. This permits desktop
+  keyboard events to reach Android input fields through the emulator window.
+
+Tor/mainnet-test checkpoint (2026-11-08):
+- scripts/env.sh now selects .tooling/jdk-25; Gradle wrapper pins 9.6.0.
+- Build Android SDK platform 37.1 and Build Tools 36.0.0; compile SDK changed, target/min remain 35/26.
+- Regtest: source scripts/env.sh && ./gradlew :app:assembleDebug :app:lintDebug
+- Isolated mainnet: ./gradlew -PmainnetTest :app:assembleDebug :app:lintDebug
+  Install output app/build/outputs/apk/debug/app-debug.apk as org.xbt.wallet.mainnettest.
+  Saved artifacts: .tooling/xbt-mainnet-test.apk and .tooling/xbt-regtest-alpha.apk.
+- Tor probe is read-only: build assembleDebugAndroidTest with -PmainnetTest, install test APK,
+  then adb shell am instrument -w -e class org.xbt.wallet.TorTransportTest org.xbt.wallet.mainnettest.test/androidx.test.runner.AndroidJUnitRunner
+  Do not run all instrumentation tests against a user wallet: existing NodeSmokeTest creates wallets.
+- Mainnet test bootstraps Tor but needs a proper XBT fee URL before LND startup/sync; no mainnet funds or channel tests performed.
+- LND fork now includes patches/lnd-tor-fee-transport.patch. scripts/build-node.sh applies it idempotently.
+
+Mainnet fee-source update:
+- -PmainnetTest now defaults missing feeUrl to mempool.guide's onion /api/v1/fees/precise.
+- patches/lnd-tor-fee-transport.patch includes mempool-schema conversion tests as well as Tor routing.
+- Onion fee API instrumentation test passed; mainnet node accepted user's onion peer and began header/filter sync.
+- .tooling/xbt-mainnet-test.apk is the current mainnet build. Regtest installation/data are preserved.
+- Initial sync was in progress at handoff; do not assume payments are ready until backend reports synced_to_chain.
