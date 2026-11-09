@@ -63,8 +63,12 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         prefs = getSharedPreferences("wallet", 0);
         if (BuildConfig.MAINNET_TEST && !prefs.contains("network")) {
-            prefs.edit().putString("network", "mainnet").putString("mode", "easy").putBoolean("useTor", true)
-                .putString("syncPeer", "oamf2472ggqj6srxyboxxnuvsdgrlyqjx22ieeurxqommu2zohjbyzyd.onion:8333").commit();
+            prefs.edit().putString("network", "mainnet").putString("mode", "easy").commit();
+        }
+        if (BuildConfig.MAINNET_TEST && !prefs.getBoolean("dnsDiscoveryConfigured", false)) {
+            prefs.edit().remove("syncPeer").putBoolean("useTor", false)
+                .putString("feeUrl", "https://mempool.guide/api/v1/fees/precise")
+                .putBoolean("dnsDiscoveryConfigured", true).commit();
         }
         if (prefs.getString("mode", "").equals("easy")) start(); else modes();
     }
@@ -241,7 +245,24 @@ public final class MainActivity extends Activity {
                     button("Create wallet", () -> work(() -> { node.createWallet(); runOnUiThread(() -> { page("Wallet created"); button("Back up seed", this::backup); button("I'll do it later, I promise", this::home); }); })); }); return;
             }
             if (state == Stateservice.WalletState.LOCKED) { node.unlock(); runOnUiThread(this::home); return; }
-            if (state != Stateservice.WalletState.SERVER_ACTIVE) { runOnUiThread(() -> { page("Wallet is starting"); text(state.name()); button("Refresh", this::home); }); return; }
+            if (state != Stateservice.WalletState.SERVER_ACTIVE) {
+                SyncProgress progress = node.syncProgress();
+                runOnUiThread(() -> {
+                    if (!screen.equals(origin)) return;
+                    page("Wallet is starting");
+                    text(state == Stateservice.WalletState.UNLOCKED ? "Wallet unlocked · synchronizing chain" : "Preparing wallet");
+                    if (progress.target > 0) {
+                        syncProgressBar("Block headers", progress.headers, progress.target, progress.percent(progress.headers));
+                        syncProgressBar("Filter headers", progress.filters, progress.target, progress.percent(progress.filters));
+                        text(progress.headers >= progress.target && progress.filters >= progress.target
+                            ? "Headers ready · finishing wallet startup…" : "Initial sync is running. Progress updates automatically.");
+                    } else {
+                        ProgressBar spinner = new ProgressBar(this); page.addView(spinner);
+                        text("Connecting to the chain peer and waiting for sync progress…");
+                    }
+                    button("Refresh", this::home);
+                }); return;
+            }
             if (!prefs.getString("receive-label", "").isEmpty()) labelReceivedTransactions(
                 LightningOuterClass.TransactionDetails.parseFrom(node.rpc("getTransactions", LightningOuterClass.GetTransactionsRequest.getDefaultInstance())));
             LightningOuterClass.GetInfoResponse info = LightningOuterClass.GetInfoResponse.parseFrom(node.rpc("getInfo", LightningOuterClass.GetInfoRequest.getDefaultInstance()));
@@ -278,6 +299,14 @@ public final class MainActivity extends Activity {
                 if (hasPublic) text("Required on-chain reserve: " + balance.getReservedBalanceAnchorChan() + " sats");
             });
         });
+    }
+    private void syncProgressBar(String label, long height, long target, int percent) {
+        text(label + " · " + percent + "%");
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100); bar.setProgress(percent);
+        bar.setProgressTintList(android.content.res.ColorStateList.valueOf(0xffa8efd5));
+        page.addView(bar, new LinearLayout.LayoutParams(-1, dp(8)));
+        text(String.format(Locale.getDefault(), "%,d / %,d", height, target));
     }
     private void homeBalances(long onChain, long channelFunds) {
         balanceSats[0] = onChain; balanceSats[1] = channelFunds;
@@ -582,8 +611,8 @@ public final class MainActivity extends Activity {
         PopupMenu popup = new PopupMenu(this, walletMenuAnchor, Gravity.END);
         walletPopup = popup;
         String[] labels = {"Payment history", "Fiat currency: " + prefs.getString("fiat-currency", "USD"),
-            "On chain funds", "Channels", "Back up seed", "Test recovery", "Advanced"};
-        Runnable[] actions = {this::paymentHistory, this::fiatCurrency, this::utxos, this::channelList,
+            "On chain funds", "Channels", "Swap controllers", "Back up seed", "Test recovery", "Advanced"};
+        Runnable[] actions = {this::paymentHistory, this::fiatCurrency, this::utxos, this::channelList, this::swapControllers,
             this::backup, this::testRecovery, this::advanced};
         for (int i = 0; i < labels.length; i++) popup.getMenu().add(0, i, i, labels[i]);
         popup.setOnMenuItemClickListener(item -> {
@@ -593,6 +622,147 @@ public final class MainActivity extends Activity {
         popup.setOnDismissListener(menu -> { if (walletPopup == popup) walletPopup = null; });
         popup.show();
     }
+    private org.json.JSONArray savedControllers() throws Exception {
+        return new org.json.JSONArray(prefs.getString("swap-controllers", "[]"));
+    }
+    private boolean controllerTor(String address) {
+        return prefs.getBoolean("useTor", false) || ControllerAddress.onion(address);
+    }
+    private void prepareControllerTransport(String address) throws Exception {
+        if (controllerTor(address)) node.testTor();
+    }
+    private void swapControllers() {
+        page("Swap controllers");
+        button("Search directory", this::controllerSearch);
+        button("Add controller", () -> controllerAdd("", ""));
+        try {
+            org.json.JSONArray saved = savedControllers();
+            if (saved.length() == 0) text("No saved controllers yet.");
+            for (int i=0; i<saved.length(); i++) {
+                org.json.JSONObject item = saved.getJSONObject(i);
+                button(item.optString("label", item.getString("name")) + "\n" + item.getString("address"), () -> controllerDetails(item));
+            }
+        } catch (Exception e) { error(e); }
+        button("Back", this::home);
+    }
+    private void controllerAdd(String address, String expectedIdentity) {
+        page("Add controller");
+        text("Controller address"); EditText url = field("https://… or http://….onion", address);
+        url.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        button("Scan QR", () -> scan(url));
+        text("Label"); EditText label = field("Optional — for your own records", "");
+        text("Onion addresses connect through Tor automatically.");
+        button("Check controller", () -> {
+            final String endpoint;
+            final String privateLabel = label.getText().toString().trim();
+            try {
+                endpoint = ControllerAddress.origin(url.getText().toString());
+                if (privateLabel.length() > 80) throw new Exception("Use a label up to 80 characters.");
+            } catch (Exception e) { error(e); return; }
+            work(() -> {
+                // Never replace an existing identity based on a directory listing.
+                String pin = expectedIdentity;
+                org.json.JSONArray existing = savedControllers();
+                for (int i=0; i<existing.length(); i++) if (endpoint.equals(existing.getJSONObject(i).getString("address"))) {
+                    String savedPin = existing.getJSONObject(i).getString("provider");
+                    if (!pin.isEmpty() && !pin.equals(savedPin)) throw new Exception("Directory identity differs from the saved controller.");
+                    pin = savedPin;
+                }
+                prepareControllerTransport(endpoint);
+                SwapControllers.Provider info = SwapControllers.inspect(endpoint, prefs.getString("network", "regtest"), pin, controllerTor(endpoint));
+                runOnUiThread(() -> {
+                    page("Review controller"); text(info.name); text(endpoint); text("XBT → BTC · " + info.network);
+                    text("Controller identity\n" + info.identity);
+                    text("Connection checked. Saving a controller does not authorize payments. Swap payments are not enabled in this build.");
+                    button("Save controller", () -> {
+                        try {
+                            org.json.JSONArray saved = savedControllers(), updated = new org.json.JSONArray();
+                            for (int i=0; i<saved.length(); i++) if (!endpoint.equals(saved.getJSONObject(i).getString("address"))) updated.put(saved.getJSONObject(i));
+                            if (updated.length() >= 20) throw new Exception("You can save up to 20 controllers.");
+                            org.json.JSONObject value = info.json().put("address", endpoint).put("checked_at", System.currentTimeMillis());
+                            if (!privateLabel.isEmpty()) value.put("label", privateLabel);
+                            updated.put(value);
+                            if (!prefs.edit().putString("swap-controllers", updated.toString()).commit()) throw new Exception("Could not save controller.");
+                            swapControllers();
+                        } catch (Exception e) { error(e); }
+                    });
+                    button("Back", () -> controllerAdd(endpoint, expectedIdentity));
+                });
+            });
+        });
+        button("Back", this::swapControllers);
+    }
+    private void controllerDetails(org.json.JSONObject item) {
+        page("Controller details");
+        String address = item.optString("address"), identity = item.optString("provider");
+        text(item.optString("label", item.optString("name"))); text(address);
+        text("XBT → BTC · " + item.optString("environment")); text("Saved identity\n" + identity);
+        text("Checked when saved: " + java.text.DateFormat.getDateTimeInstance().format(new Date(item.optLong("checked_at"))));
+        text("Swap payments are not enabled in this build.");
+        button("Check connection", () -> work(() -> {
+            prepareControllerTransport(address);
+            SwapControllers.inspect(address, prefs.getString("network", "regtest"), identity, controllerTor(address));
+            runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Controller reachable")
+                .setMessage("The controller responded with its saved identity.").setPositiveButton("OK", null).show());
+        }));
+        button("Remove controller", () -> new AlertDialog.Builder(this).setTitle("Remove saved controller?")
+            .setMessage("This removes the controller from this wallet’s list.").setNegativeButton("Cancel", null)
+            .setPositiveButton("Remove", (d, w) -> {
+                try {
+                    org.json.JSONArray saved = savedControllers(), updated = new org.json.JSONArray();
+                    for (int i=0; i<saved.length(); i++) if (!address.equals(saved.getJSONObject(i).getString("address"))) updated.put(saved.getJSONObject(i));
+                    if (!prefs.edit().putString("swap-controllers", updated.toString()).commit()) throw new Exception("Could not remove controller.");
+                    swapControllers();
+                } catch (Exception e) { error(e); }
+            }).show());
+        button("Back", this::swapControllers);
+    }
+    private void controllerSearch() {
+        page("Search controllers");
+        text("Directory address");
+        EditText directory = field("https://… or http://….onion", prefs.getString("swap-directory", ""));
+        text("Search a controller directory, or use a controller’s discovery address. No public directory is bundled yet.");
+        button("Search", () -> {
+            final String address;
+            try { address = ControllerAddress.origin(directory.getText().toString()); }
+            catch (Exception e) { error(e); return; }
+            work(() -> {
+                prepareControllerTransport(address);
+                List<SwapControllers.Provider> results = SwapControllers.search(address, prefs.getString("network", "regtest"), controllerTor(address));
+                prefs.edit().putString("swap-directory", address).apply();
+                runOnUiThread(() -> controllerResults(results));
+            });
+        });
+        button("Scan directory QR", () -> scan(directory));
+        button("Back", this::swapControllers);
+    }
+    private void controllerResults(List<SwapControllers.Provider> results) {
+        page("Search results");
+        EditText query = field("Search name or address", "");
+        LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL); page.addView(rows);
+        Runnable render = () -> {
+            rows.removeAllViews(); String search = query.getText().toString().toLowerCase(Locale.ROOT).trim(); int matches = 0;
+            for (SwapControllers.Provider p : results) {
+                if (!(p.name + " " + String.join(" ", p.endpoints)).toLowerCase(Locale.ROOT).contains(search)) continue;
+                matches++;
+                for (String address : p.endpoints) {
+                    Button row = new Button(this); styleButton(row, false);
+                    row.setText(p.name + "\n" + address);
+                    LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, -2); size.topMargin = dp(6); rows.addView(row, size);
+                    row.setOnClickListener(v -> controllerAdd(address, p.identity));
+                }
+            }
+            if (matches == 0) { TextView empty = new TextView(this); empty.setText("No matching controllers."); empty.setTextColor(0xffafbeb6); rows.addView(empty); }
+        };
+        query.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) { render.run(); }
+            public void afterTextChanged(android.text.Editable e) {}
+        });
+        render.run();
+        button("Back", this::controllerSearch);
+    }
+
     private void advanced() {
         page("Advanced"); text(node == null ? "Node disconnected" : node.status);
         button("Node connection", this::nodeConnection);
@@ -602,7 +772,9 @@ public final class MainActivity extends Activity {
     private void nodeConnection() {
         page("Node connection");
         text("Network: " + prefs.getString("network", "regtest") + " · compact-filter P2P peer");
-        EditText peer = field("Full-node host:port", prefs.getString("syncPeer", "10.0.2.2:19444"));
+        boolean mainnet = prefs.getString("network", "regtest").equals("mainnet");
+        EditText peer = field(mainnet ? "Automatic discovery (leave blank)" : "Full-node host:port",
+            prefs.getString("syncPeer", mainnet ? "" : "10.0.2.2:19444"));
         CheckBox tor = new CheckBox(this); tor.setText("Use Tor"); tor.setChecked(prefs.getBoolean("useTor", false)); page.addView(tor);
         EditText feeUrl = null;
         if (prefs.getString("network", "regtest").equals("mainnet")) {
@@ -628,7 +800,8 @@ public final class MainActivity extends Activity {
         });
         button("Save connection", () -> {
             try {
-                String endpoint = Policy.endpoint(peer.getText().toString());
+                String entered = peer.getText().toString().trim();
+                String endpoint = mainnet && entered.isEmpty() ? "" : Policy.endpoint(entered);
                 if (endpoint.contains(".onion:") && !tor.isChecked()) throw new Exception("Enable Tor for an onion peer.");
                 android.content.SharedPreferences.Editor edit = prefs.edit().putString("syncPeer", endpoint).putBoolean("useTor", tor.isChecked());
                 if (feeSource != null && !feeSource.getText().toString().trim().isEmpty()) edit.putString("feeUrl", Policy.feeUrl(feeSource.getText().toString(), tor.isChecked()));

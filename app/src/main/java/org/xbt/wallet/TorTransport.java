@@ -15,12 +15,13 @@ final class TorTransport {
     private volatile TorService service;
     private boolean bound;
     private static volatile int httpPort;
+    private static volatile int socksPort;
     private final CountDownLatch connected = new CountDownLatch(1);
     private final ServiceConnection connection = new ServiceConnection() {
         public void onServiceConnected(ComponentName name, IBinder binder) {
             service = ((TorService.LocalBinder) binder).getService(); connected.countDown();
         }
-        public void onServiceDisconnected(ComponentName name) { service = null; httpPort = 0; }
+        public void onServiceDisconnected(ComponentName name) { service = null; httpPort = 0; socksPort = 0; }
     };
     int start(Context context, Consumer<String> status) throws Exception {
         status.accept("Connecting to Tor…");
@@ -43,7 +44,7 @@ final class TorTransport {
                     if (progress.find()) status.accept("Connecting to Tor · " + progress.group(1) + "%");
                 }
                 if ("1".equals(tor.getInfo("status/circuit-established")) && tor.getSocksPort() > 0) {
-                    httpPort = tor.getHttpTunnelPort();
+                    httpPort = tor.getHttpTunnelPort(); socksPort = tor.getSocksPort();
                     status.accept("Tor connected"); return tor.getSocksPort();
                 }
             }
@@ -51,13 +52,17 @@ final class TorTransport {
         }
         throw new Exception("Tor has not connected after 3 minutes. Check your connection and retry; no direct connection was used.");
     }
+    static Proxy socksProxy() throws Exception {
+        if (socksPort <= 0) throw new Exception("Tor is not ready");
+        return new Proxy(Proxy.Type.SOCKS, new InetSocketAddress("127.0.0.1", socksPort));
+    }
     static Proxy httpProxy() throws Exception {
         int port = httpPort;
         if (port <= 0) throw new Exception("Tor is not ready");
         return new Proxy(Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", port));
     }
     void close(Context context) {
-        httpPort = 0;
+        httpPort = 0; socksPort = 0;
         if (bound) { context.unbindService(connection); bound = false; }
     }
 }

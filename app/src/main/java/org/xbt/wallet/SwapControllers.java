@@ -1,0 +1,135 @@
+package org.xbt.wallet;
+
+import org.json.*;
+import java.net.*;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+/** Public discovery only. No quotes, credentials, authorization or payments. */
+final class SwapControllers {
+    static final int LIMIT = 65536;
+    static final String INFO = "/v1/provider/info", DIRECTORY = "/v1/providers";
+    static final class Provider {
+        final String name, identity, network;
+        final List<String> endpoints;
+        Provider(JSONObject json, String expectedNetwork) throws Exception {
+            if (!"xbt-swap-provider-v1".equals(json.getString("format"))) throw new Exception("Unsupported controller discovery protocol.");
+            name = json.getString("name"); identity = json.getString("provider"); network = json.getString("environment");
+            if (name.trim().isEmpty() || name.length() > 80 || name.matches("(?s).*[\\p{Cntrl}].*")
+                || !identity.matches("(02|03)[0-9a-f]{64}")) throw new Exception("Controller returned invalid details.");
+            if (!network.equals(expectedNetwork)) throw new Exception("Controller is on a different network.");
+            JSONArray urls = json.getJSONArray("endpoints");
+            if (urls.length() < 1 || urls.length() > 4) throw new Exception("Controller returned invalid addresses.");
+            endpoints = new ArrayList<>();
+            for (int i = 0; i < urls.length(); i++) {
+                String url = ControllerAddress.origin(urls.getString(i));
+                if (!endpoints.contains(url)) endpoints.add(url);
+            }
+            JSONArray pairs = json.getJSONArray("pairs");
+            boolean pair = false;
+            for (int i=0; i<pairs.length(); i++) if ("XBT/BTC".equals(pairs.getString(i))) pair = true;
+            if (!pair) throw new Exception("Controller does not advertise XBT/BTC swaps.");
+        }
+        JSONObject json() throws Exception {
+            return new JSONObject().put("format", "xbt-swap-provider-v1").put("name", name).put("provider", identity)
+                .put("environment", network).put("endpoints", new JSONArray(endpoints)).put("pairs", new JSONArray().put("XBT/BTC"));
+        }
+    }
+    static Provider inspect(String address, String network, String expectedIdentity, boolean useTor) throws Exception {
+        String origin = ControllerAddress.origin(address);
+        Provider p = new Provider(get(origin, INFO, useTor), network);
+        if (!p.endpoints.contains(origin)) throw new Exception("Controller does not advertise this address.");
+        if (expectedIdentity != null && !expectedIdentity.isEmpty() && !expectedIdentity.equals(p.identity))
+            throw new Exception("Controller identity changed. The saved controller was not replaced.");
+        return p;
+    }
+    static List<Provider> search(String address, String network, boolean useTor) throws Exception {
+        JSONObject json = get(ControllerAddress.origin(address), DIRECTORY, useTor);
+        if (!"xbt-swap-directory-v1".equals(json.getString("format"))) throw new Exception("Unsupported controller directory.");
+        JSONArray rows = json.getJSONArray("providers");
+        if (rows.length() > 100) throw new Exception("Controller directory is too large.");
+        List<Provider> result = new ArrayList<>(); Set<String> seen = new HashSet<>();
+        for (int i=0; i<rows.length(); i++) {
+            JSONObject row = rows.getJSONObject(i);
+            if (!network.equals(row.optString("environment"))) continue;
+            Provider p = new Provider(row, network);
+            if (seen.add(p.identity)) result.add(p);
+        }
+        return result;
+    }
+    private static JSONObject get(String origin, String path, boolean useTor) throws Exception {
+        URI uri = URI.create(origin + path);
+        boolean onion = ControllerAddress.onion(origin);
+        if (onion && !useTor) throw new Exception("Tor is required for this controller.");
+        byte[] body;
+        if ("http".equals(uri.getScheme())) {
+            body = onionRequest(uri, TorTransport.socksProxy());
+        } else {
+            HttpURLConnection connection = (HttpURLConnection) (useTor ? uri.toURL().openConnection(TorTransport.httpProxy()) : uri.toURL().openConnection());
+            connection.setConnectTimeout(useTor ? 30000 : 10000); connection.setReadTimeout(useTor ? 30000 : 10000);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept", "application/json"); connection.setRequestProperty("User-Agent", "XBTWallet/0.1");
+            try {
+                if (connection.getResponseCode() != 200) throw new Exception("Controller unavailable (HTTP " + connection.getResponseCode() + ").");
+                String type = connection.getContentType();
+                if (type == null || !type.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) throw new Exception("Controller did not return JSON.");
+                try (InputStream input = connection.getInputStream()) { body = bounded(input, LIMIT); }
+            } finally { connection.disconnect(); }
+        }
+        try { return new JSONObject(new String(body, StandardCharsets.UTF_8)); }
+        catch (JSONException e) { throw new Exception("Controller returned invalid JSON."); }
+    }
+    static byte[] bounded(InputStream input, int limit) throws IOException {
+        ByteArrayOutputStream result = new ByteArrayOutputStream(); byte[] buffer = new byte[4096]; int count;
+        while ((count = input.read(buffer)) != -1) {
+            if (result.size() + count > limit) throw new IOException("Controller response is too large.");
+            result.write(buffer, 0, count);
+        }
+        return result.toByteArray();
+    }
+    // HTTP onion traffic goes only through SOCKS with unresolved DNS. Android's
+    // cleartext policy stays disabled; no direct socket or TLS bypass is used.
+    static byte[] onionRequest(URI uri, Proxy proxy) throws Exception {
+        if (!ControllerAddress.onion(ControllerAddress.origin("http://" + uri.getRawAuthority())) || proxy.type() != Proxy.Type.SOCKS)
+            throw new Exception("Onion transport requires Tor.");
+        try (Socket socket = new Socket(proxy)) {
+            socket.connect(InetSocketAddress.createUnresolved(uri.getHost(), uri.getPort() < 0 ? 80 : uri.getPort()), 30000);
+            socket.setSoTimeout(30000);
+            String request = "GET " + uri.getRawPath() + " HTTP/1.1\r\nHost: " + uri.getRawAuthority()
+                + "\r\nAccept: application/json\r\nUser-Agent: XBTWallet/0.1\r\nConnection: close\r\n\r\n";
+            socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
+            byte[] all = bounded(socket.getInputStream(), LIMIT + 8192);
+            String raw = new String(all, StandardCharsets.ISO_8859_1); int split = raw.indexOf("\r\n\r\n");
+            if (split < 0 || split > 8192) throw new Exception("Invalid controller HTTP response.");
+            String[] headers = raw.substring(0, split).split("\r\n");
+            if (!headers[0].matches("HTTP/1\\.[01] 200(?: .*)?")) throw new Exception("Controller unavailable through Tor.");
+            Map<String, String> fields = new HashMap<>();
+            for (int i=1; i<headers.length; i++) {
+                int colon = headers[i].indexOf(':'); if (colon < 1) throw new Exception("Invalid response headers.");
+                String key = headers[i].substring(0, colon).toLowerCase(Locale.ROOT);
+                if (fields.put(key, headers[i].substring(colon+1).trim()) != null) throw new Exception("Duplicate response headers.");
+            }
+            if (!fields.getOrDefault("content-type", "").split(";", 2)[0].trim().equalsIgnoreCase("application/json")) throw new Exception("Controller did not return JSON.");
+            byte[] body = Arrays.copyOfRange(all, split+4, all.length);
+            String transfer = fields.get("transfer-encoding");
+            if (transfer != null) {
+                if (!transfer.equalsIgnoreCase("chunked") || fields.containsKey("content-length")) throw new Exception("Invalid response framing.");
+                ByteArrayInputStream input = new ByteArrayInputStream(body); ByteArrayOutputStream output = new ByteArrayOutputStream();
+                while (true) {
+                    StringBuilder line = new StringBuilder(); int b;
+                    while ((b=input.read()) != -1 && b != '\n') { if (line.length() > 80) throw new Exception("Invalid chunk."); line.append((char)b); }
+                    if (b == -1) throw new Exception("Incomplete controller response.");
+                    int size = Integer.parseInt(line.toString().trim().split(";",2)[0],16);
+                    if (size == 0) break;
+                    if (size < 0 || size > LIMIT-output.size()) throw new Exception("Controller response is too large.");
+                    byte[] chunk = new byte[size]; if (input.read(chunk) != size || input.read() != '\r' || input.read() != '\n') throw new Exception("Incomplete controller response.");
+                    output.write(chunk);
+                }
+                body = output.toByteArray();
+            } else if (fields.containsKey("content-length") && Long.parseLong(fields.get("content-length")) != body.length) throw new Exception("Incomplete controller response.");
+            if (body.length > LIMIT) throw new Exception("Controller response is too large.");
+            return body;
+        }
+    }
+}

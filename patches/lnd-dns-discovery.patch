@@ -1,0 +1,92 @@
+diff --git a/chainreg/blake2b_neutrino.go b/chainreg/blake2b_neutrino.go
+index 4341cfa43..bcbbb2c8d 100644
+--- a/chainreg/blake2b_neutrino.go
++++ b/chainreg/blake2b_neutrino.go
+@@ -23,6 +23,12 @@ import (
+ // shared parameters are left untouched: the checkpoint goes on a copy.
+ func NeutrinoChainParams(params BitcoinNetParams) *bitcoinCfg.Params {
+ 	p := *params.Params
++	if p.Net == wire.MainNet {
++		p.DNSSeeds = []bitcoinCfg.DNSSeed{
++			{Host: "dnsseed.bitcoin.dashjr-list-of-p2p-nodes.us", HasFiltering: true},
++			{Host: "seed.bitcoin.haf.ovh", HasFiltering: true},
++		}
++	}
+ 	if params.Blake2bActivationHash == nil ||
+ 		params.Blake2bActivationHeight == 0 {
+ 
+diff --git a/chainreg/blake2b_neutrino_test.go b/chainreg/blake2b_neutrino_test.go
+index a24970cfd..e5e5facfb 100644
+--- a/chainreg/blake2b_neutrino_test.go
++++ b/chainreg/blake2b_neutrino_test.go
+@@ -67,6 +67,11 @@ func TestNeutrinoChainParamsCheckpoint(t *testing.T) {
+ 	before := len(chaincfg.MainNetParams.Checkpoints)
+ 
+ 	p := NeutrinoChainParams(BitcoinMainNetParams)
++	require.Equal(t, []chaincfg.DNSSeed{
++		{Host: "dnsseed.bitcoin.dashjr-list-of-p2p-nodes.us", HasFiltering: true},
++		{Host: "seed.bitcoin.haf.ovh", HasFiltering: true},
++	}, p.DNSSeeds)
++	require.NotEqual(t, chaincfg.MainNetParams.DNSSeeds, p.DNSSeeds)
+ 	require.Len(t, chaincfg.MainNetParams.Checkpoints, before,
+ 		"shared parameters changed")
+ 	require.Len(t, p.Checkpoints, before+1)
+diff --git a/config_blake2b.go b/config_blake2b.go
+index 09577595d..98e161396 100644
+--- a/config_blake2b.go
++++ b/config_blake2b.go
+@@ -169,13 +169,9 @@ func applyUnifiedSigHash(enabled bool) {
+ 	txauthor.LegacySigHashType = txscript.SigHashAll
+ }
+ 
+-// checkNeutrinoBlake2b holds the neutrino options that matter on the BLAKE2b
+-// chain. The DNS seeds of mainnet and testnet4 are Bitcoin's and return almost
+-// only nodes on the SHA256d chain, which the light client bans at the
+-// activation height, so it needs peers that serve BLAKE2b headers and compact
+-// filters, named with neutrino.connect. neutrino.addpeer alone still mixes in
+-// seed peers: allowed, with a warning. The header import reads 80-byte
+-// headers only and cannot carry a chain past the activation height.
++// checkNeutrinoBlake2b validates the light-client options. Mainnet uses
++// BLAKE2b-aware DNS seeds; other public networks still require explicit peers.
++// The header import reads 80-byte headers only and cannot cross activation.
+ func checkNeutrinoBlake2b(cfg *Config) error {
+ 	if cfg.NeutrinoMode.BlockHeadersSource != "" ||
+ 		cfg.NeutrinoMode.FilterHeadersSource != "" {
+@@ -195,7 +191,8 @@ func checkNeutrinoBlake2b(cfg *Config) error {
+ 			"neutrino on mainnet")
+ 	}
+ 
+-	if cfg.Bitcoin.IsLocalNetwork() ||
++	// Mainnet uses BLAKE2b-aware seeds in chainreg.NeutrinoChainParams.
++	if cfg.Bitcoin.MainNet || cfg.Bitcoin.IsLocalNetwork() ||
+ 		len(cfg.NeutrinoMode.ConnectPeers) > 0 {
+ 
+ 		return nil
+diff --git a/config_blake2b_test.go b/config_blake2b_test.go
+index 471f3cbdb..2bbe5aae6 100644
+--- a/config_blake2b_test.go
++++ b/config_blake2b_test.go
+@@ -372,7 +372,7 @@ func TestCheckNeutrinoBlake2b(t *testing.T) {
+ 	})))
+ 
+ 	err = checkNeutrinoBlake2b(mainnet(func(*Config) {}))
+-	require.ErrorContains(t, err, "neutrino.connect")
++	require.NoError(t, err)
+ 
+ 	require.NoError(t, checkNeutrinoBlake2b(mainnet(func(c *Config) {
+ 		c.NeutrinoMode.ConnectPeers = []string{"knots.example:8333"}
+diff --git a/config_builder.go b/config_builder.go
+index e7fac5968..38eebd44d 100644
+--- a/config_builder.go
++++ b/config_builder.go
+@@ -1829,6 +1829,10 @@ func initNeutrinoBackend(ctx context.Context, cfg *Config, chainDir string,
+ 	// With the database open, we can now create an instance of the
+ 	// neutrino light client. We pass in relevant configuration parameters
+ 	// required.
++	// Require fork support in DNS queries and address-manager selection.
++	if cfg.Bitcoin.MainNet {
++		neutrino.RequiredServices |= neutrino.SFNodeBlake2b
++	}
+ 	config := neutrino.Config{
+ 		DataDir:  dbPath,
+ 		Database: db,

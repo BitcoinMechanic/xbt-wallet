@@ -22,6 +22,8 @@ public final class NodeService extends Service {
     public volatile String status = "Starting your XBT node…";
     public volatile boolean rpcReady;
     private boolean started;
+    private final SyncProgress sync = new SyncProgress();
+    private long syncLogOffset;
     private final TorTransport tor = new TorTransport();
     public final class LocalBinder extends Binder { NodeService service() { return NodeService.this; } }
     @Override public IBinder onBind(Intent intent) { return new LocalBinder(); }
@@ -41,14 +43,15 @@ public final class NodeService extends Service {
     private void startNode() {
         try {
             SharedPreferences prefs = getSharedPreferences("wallet", 0);
-            String peer = Policy.endpoint(prefs.getString("syncPeer", "10.0.2.2:19444"));
             // Network cannot be changed once secrets are created. Separate directory adds a second boundary.
             String network = prefs.getString("network", "regtest");
+            String configuredPeer = prefs.getString("syncPeer", network.equals("mainnet") ? "" : "10.0.2.2:19444").trim();
+            String peer = configuredPeer.isEmpty() && network.equals("mainnet") ? "" : Policy.endpoint(configuredPeer);
             if (!network.equals("regtest") && !network.equals("mainnet")) throw new Exception("Unsupported network");
             File directory = new File(getFilesDir(), "node-" + network);
             if (!directory.exists() && !directory.mkdirs()) throw new Exception("Cannot create node directory");
             String args = "--lnddir=" + directory.getAbsolutePath() + " --bitcoin.active --bitcoin." + network
-                    + " --bitcoin.node=neutrino --neutrino.connect=" + peer
+                    + " --bitcoin.node=neutrino" + (peer.isEmpty() ? "" : " --neutrino.connect=" + peer)
                     + " --nolisten --norest --rpclisten=127.0.0.1:0 --tlsdisableautofill";
             if (network.equals("regtest")) args += " --bitcoin.blake2b-activation-height=1";
 
@@ -63,16 +66,31 @@ public final class NodeService extends Service {
             if (network.equals("mainnet")) {
                 String feeUrl = prefs.getString("feeUrl", "");
                 if (feeUrl.isEmpty()) {
-                    feeUrl = "http://mempool5nxspkxjk3n5afqh7zswbv4i324z76ltmw3cvfmniw45mnhad.onion/api/v1/fees/precise";
+                    feeUrl = useTor ? "http://mempool5nxspkxjk3n5afqh7zswbv4i324z76ltmw3cvfmniw45mnhad.onion/api/v1/fees/precise"
+                        : "https://mempool.guide/api/v1/fees/precise";
                     prefs.edit().putString("feeUrl", feeUrl).apply();
                 }
                 args += " --fee.url=" + Policy.feeUrl(feeUrl, useTor);
             }
             Lndmobile.start(args, new Callback() {
-                public void onResponse(byte[] ignored) { rpcReady = true; status = useTor ? "Node started · Tor" : "Node started"; }
+                public void onResponse(byte[] ignored) { rpcReady = true; status = useTor ? "Node started · Tor" : "Node started · direct connection"; }
                 public void onError(Exception error) { rpcReady = false; status = "Node could not start: " + error.getMessage(); }
             });
         } catch (Exception e) { status = e.getMessage(); }
+    }
+    public SyncProgress syncProgress() {
+        String network = getSharedPreferences("wallet", 0).getString("network", "regtest");
+        File log = new File(getFilesDir(), "node-" + network + "/logs/bitcoin/" + network + "/lnd.log");
+        try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(log, "r")) {
+            if (input.length() < syncLogOffset) syncLogOffset = 0;
+            input.seek(syncLogOffset);
+            String line;
+            while ((line = input.readLine()) != null) sync.accept(line);
+            syncLogOffset = input.getFilePointer();
+        } catch (java.io.IOException ignored) { /* No progress log yet. */ }
+        SyncProgress snapshot = new SyncProgress();
+        snapshot.target = sync.target; snapshot.headers = sync.headers; snapshot.filters = sync.filters;
+        return snapshot;
     }
     public void testTor() throws Exception { tor.start(this, message -> status = message); }
     public void testTorPeer(String endpoint) throws Exception {

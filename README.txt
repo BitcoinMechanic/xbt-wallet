@@ -24,7 +24,7 @@ Clone https://github.com/paulscode/lightning-fork into .deps/lightning-fork
 and check out aa3f4a4e7c1fbad1b291b5acfe83e2b362d2fd56.
 Install gomobile/gobind v0.0.0-20261011034528-197770444867.
 Run the fork's `make mobile-rpc` to generate mobile RPC bindings.
-Then run scripts/build-node.sh; it applies the tracked fee/Tor patch and
+Then run scripts/build-node.sh; it applies the tracked fee/Tor and DNS discovery patches and
 creates app/libs/Lndmobile.aar. The generated offers RPC delta from the
 original build is also preserved in patches for source provenance.
 Native AARs, generated bindings, SDKs, node data, and secrets are not in Git.
