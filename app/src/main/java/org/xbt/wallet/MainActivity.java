@@ -1373,7 +1373,7 @@ public final class MainActivity extends Activity {
         fee.setContentDescription("Network fee rate in sats per vbyte");
         fee.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         TextView summary = text("Estimated network fee: —\nTotal including fee: —");
-        String[] manualAmount = {""}; boolean[] updating = {false};
+        boolean[] updating = {false};
         Runnable update = () -> {
             if (updating[0]) return;
             updating[0] = true;
@@ -1397,9 +1397,7 @@ public final class MainActivity extends Activity {
             } finally { updating[0] = false; }
         };
         useAll.setOnCheckedChangeListener((v, checked) -> {
-            if (checked) manualAmount[0] = amount.getText().toString();
-            else amount.setText(manualAmount[0]);
-            entry.enabled(!checked); update.run();
+            amount.setEnabled(!checked); update.run();
         });
         for (Map.Entry<CheckBox, LightningOuterClass.Utxo> coinEntry : boxes.entrySet())
             coinEntry.getKey().setOnCheckedChangeListener((v, checked) -> {
