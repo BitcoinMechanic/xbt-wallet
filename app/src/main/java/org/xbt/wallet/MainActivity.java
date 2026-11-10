@@ -38,6 +38,7 @@ public final class MainActivity extends Activity {
     private boolean ratesLoading;
     private long lastRatesAttempt;
     private org.json.JSONObject fiatRates;
+    private AmountEntry activeAmountEntry;
     private ByteString receivingInvoiceHash;
     private EditText scanTarget;
     private String receivingAddress;
@@ -82,6 +83,7 @@ public final class MainActivity extends Activity {
         page(title, false);
     }
     private void page(String title, boolean sensitive) {
+        activeAmountEntry = null;
         // Allow remote UI testing only in debug builds on the valueless test chain.
         boolean mirrorable = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
                 && prefs.getString("network", "regtest").equals("regtest") && !sensitive;
@@ -398,6 +400,10 @@ public final class MainActivity extends Activity {
                     prefs.edit().putString("fiat-rates", fetched.toString()).apply();
                 }
                 if (screen.equals("Home")) updateBalanceAmounts();
+                if (activeAmountEntry != null) {
+                    activeAmountEntry.changed.run();
+                    activeAmountEntry.updateEquivalent();
+                }
             });
         }, "fiat-rates").start();
     }
@@ -422,6 +428,7 @@ public final class MainActivity extends Activity {
         final LinearLayout row;
         final EditText input;
         final Button currency;
+        final TextView equivalent;
         int unit;
         Long exactSats;
         String exactText;
@@ -437,6 +444,8 @@ public final class MainActivity extends Activity {
             currency = new Button(MainActivity.this); styleButton(currency, false); currency.setText("sats");
             LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(82), -2); size.leftMargin = dp(8);
             row.addView(currency, size); page.addView(row);
+            equivalent = text(""); equivalent.setTextSize(13); equivalent.setVisibility(View.GONE);
+            activeAmountEntry = this;
             currency.setContentDescription("Amount currency. Tap to cycle sats, XBT and fiat.");
             currency.setOnClickListener(v -> {
                 try {
@@ -449,11 +458,11 @@ public final class MainActivity extends Activity {
                     input.setContentDescription(heading + " in " + currency.getText());
                     if (value != null) setSats(value);
                 } catch (Exception e) { error(e); }
-                finally { changing = false; changed.run(); }
+                finally { changing = false; changed.run(); updateEquivalent(); }
             });
             input.addTextChangedListener(new android.text.TextWatcher() {
                 public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-                public void onTextChanged(CharSequence s, int start, int before, int count) { if (!changing) { exactSats = null; changed.run(); } }
+                public void onTextChanged(CharSequence s, int start, int before, int count) { if (!changing) { exactSats = null; changed.run(); updateEquivalent(); } }
                 public void afterTextChanged(android.text.Editable s) {}
             });
             if (!prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
@@ -466,9 +475,22 @@ public final class MainActivity extends Activity {
             boolean wasChanging = changing; changing = true;
             try {
                 exactText = AmountUnits.input(value, unit, amountPrice()); exactSats = value; input.setText(exactText);
-            } finally { changing = wasChanging; }
+            } finally { changing = wasChanging; updateEquivalent(); }
         }
-        void visible(boolean show) { title.setVisibility(show ? View.VISIBLE : View.GONE); row.setVisibility(show ? View.VISIBLE : View.GONE); }
+        void updateEquivalent() {
+            String value = "";
+            String code = prefs.getString("fiat-currency", "USD");
+            if (row.getVisibility() == View.VISIBLE && !input.getText().toString().trim().isEmpty() && !code.equals("Off")) {
+                try {
+                    long amount = sats();
+                    value = unit == 2 ? amount + " sats" : BalanceDisplay.format(amount, 2, code, amountPrice());
+                } catch (IllegalArgumentException ignored) {
+                    if (unit == 2 && amountPrice() == null) value = "Exchange rate unavailable";
+                }
+            }
+            equivalent.setText(value); equivalent.setVisibility(value.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+        void visible(boolean show) { title.setVisibility(show ? View.VISIBLE : View.GONE); row.setVisibility(show ? View.VISIBLE : View.GONE); updateEquivalent(); }
         void enabled(boolean enabled) { input.setEnabled(enabled); currency.setEnabled(enabled); }
     }
     private void fiatCurrency() {
