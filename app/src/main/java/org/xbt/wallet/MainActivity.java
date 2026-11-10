@@ -167,7 +167,7 @@ public final class MainActivity extends Activity {
     }
     private void setFieldHint(EditText field, String hint) {
         android.text.SpannableString styled = new android.text.SpannableString(hint);
-        if (hint.toLowerCase(Locale.ROOT).contains("optional") || hint.equals("Leave blank for any amount") || hint.equals("Invoice") || hint.equals("Required for swaps")) {
+        if (hint.toLowerCase(Locale.ROOT).contains("optional") || hint.equals("Leave blank for any amount") || hint.equals("ln...") || hint.equals("Required for swaps")) {
             styled.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.ITALIC),
                 0, styled.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
@@ -1685,9 +1685,13 @@ public final class MainActivity extends Activity {
     private void payment() {
         page("Pay Lightning"); text("XBT invoices only. Review the recipient and amount before paying.");
         text("Invoice");
-        EditText invoice = field("Invoice", "");
-        invoice.setContentDescription("Invoice. Tap to paste from clipboard.");
-        invoice.setOnClickListener(v -> {
+        EditText invoice = field("ln...", "");
+        invoice.setShowSoftInputOnFocus(false);
+        invoice.setContentDescription("Invoice. Tap to scan a QR code or paste from clipboard.");
+        invoice.setOnClickListener(v -> new AlertDialog.Builder(this)
+            .setTitle("Invoice")
+            .setNegativeButton("Scan QR", (dialog, which) -> scan(invoice))
+            .setPositiveButton("Paste from Clipboard", (dialog, which) -> {
             android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
             ClipData clip = clipboard.getPrimaryClip();
             CharSequence copied = clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).getText() : null;
@@ -1697,7 +1701,7 @@ public final class MainActivity extends Activity {
             }
             invoice.setText(copied.toString().trim());
             invoice.setSelection(invoice.length());
-        });
+        }).show());
         AmountEntry entry = new AmountEntry("Amount", "Enter an amount"); entry.visible(false);
         Runnable detectAmount = () -> {
             final String raw = invoice.getText().toString().trim().replaceFirst("(?i)^lightning:", "");
@@ -1720,7 +1724,6 @@ public final class MainActivity extends Activity {
         text("Label");
         EditText sendLabel = labelField("");
         setFieldHint(sendLabel, "Optional");
-        button("Scan invoice QR", () -> scan(invoice));
         button("Review invoice", () -> {
             String raw = invoice.getText().toString().trim().replaceFirst("(?i)^lightning:", "");
             final String paymentLabel = sendLabel.getText().toString().trim();
