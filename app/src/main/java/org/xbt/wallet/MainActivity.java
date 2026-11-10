@@ -74,6 +74,8 @@ public final class MainActivity extends Activity {
     private FrameLayout pageHeader;
     private ImageView headerBrand;
     private TextView headerRate;
+    private float headerSlide;
+    private android.animation.ValueAnimator headerSlideAnimation;
     private String viewingSwapHash;
     private View walletMenuAnchor;
     private PopupMenu walletPopup;
@@ -154,11 +156,13 @@ public final class MainActivity extends Activity {
             return insets;
         });
         scroll.addView(page); setContentView(scroll);
+        if (headerSlideAnimation != null) headerSlideAnimation.cancel();
+        headerSlideAnimation = null;
+        headerSlide = prefs.getBoolean("header-fiat-rate", false) ? 1f : 0f;
         FrameLayout header = new FrameLayout(this); pageHeader = header;
         ImageView brand = new ImageView(this) {
             @Override protected void onDraw(android.graphics.Canvas canvas) {
-                if (!prefs.getBoolean("header-fiat-rate", false)) { super.onDraw(canvas); return; }
-                // Keep the original rope flourishes; clip out just the central lettering.
+                // Draw fixed rope flourishes, then slide only the central lettering.
                 android.graphics.drawable.Drawable logo = getDrawable();
                 if (logo == null) return;
                 float scale = Math.min((float) getWidth() / logo.getIntrinsicWidth(), (float) getHeight() / logo.getIntrinsicHeight());
@@ -176,6 +180,11 @@ public final class MainActivity extends Activity {
                 }
                 int saved = canvas.save(); canvas.clipPath(wings);
                 super.onDraw(canvas); canvas.restoreToCount(saved);
+                saved = canvas.save();
+                canvas.clipRect(x + .26f * w, y, x + .74f * w, y + h);
+                canvas.clipOutPath(wings);
+                canvas.translate(-headerSlide * dp(100), 0);
+                super.onDraw(canvas); canvas.restoreToCount(saved);
             }
         }; headerBrand = brand;
         brand.setImageResource(org.xbt.wallet.R.drawable.xbt_logo);
@@ -187,9 +196,21 @@ public final class MainActivity extends Activity {
         headerRate.setTextColor(0xffe8d2a7);
         headerRate.setMaxLines(3);
         headerRate.setAutoSizeTextTypeUniformWithConfiguration(8, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
-        header.addView(headerRate, new FrameLayout.LayoutParams(dp(70), dp(72), Gravity.CENTER));
+        FrameLayout rateViewport = new FrameLayout(this);
+        rateViewport.setClipChildren(true);
+        rateViewport.addView(headerRate, new FrameLayout.LayoutParams(-1, -1));
+        header.addView(rateViewport, new FrameLayout.LayoutParams(dp(70), dp(72), Gravity.CENTER));
         View.OnClickListener toggleRate = v -> {
             prefs.edit().putBoolean("header-fiat-rate", !prefs.getBoolean("header-fiat-rate", false)).apply();
+            if (headerSlideAnimation != null) headerSlideAnimation.cancel();
+            headerSlideAnimation = android.animation.ValueAnimator.ofFloat(headerSlide, prefs.getBoolean("header-fiat-rate", false) ? 1f : 0f);
+            headerSlideAnimation.setDuration(100);
+            headerSlideAnimation.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+            headerSlideAnimation.addUpdateListener(animation -> {
+                headerSlide = (float) animation.getAnimatedValue();
+                positionHeaderRate();
+            });
+            headerSlideAnimation.start();
             updateHeaderRate();
             if (prefs.getBoolean("header-fiat-rate", false) && !prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         };
@@ -213,11 +234,7 @@ public final class MainActivity extends Activity {
     }
     private void updateHeaderRate() {
         if (headerBrand == null || headerRate == null) return;
-        boolean show = prefs.getBoolean("header-fiat-rate", false);
-        headerBrand.setVisibility(View.VISIBLE);
-        headerBrand.invalidate();
-        headerRate.setVisibility(show ? View.VISIBLE : View.GONE);
-        if (!show) return;
+        positionHeaderRate();
         String currency = prefs.getString("fiat-currency", "USD");
         java.math.BigDecimal price = amountPrice();
         String value;
@@ -231,6 +248,13 @@ public final class MainActivity extends Activity {
         }
         headerRate.setText(value);
         headerRate.setContentDescription(value + ". Tap to show the XBT logo.");
+    }
+    private void positionHeaderRate() {
+        headerBrand.invalidate();
+        headerRate.setTranslationX((1f - headerSlide) * dp(100));
+        headerRate.setVisibility(headerSlide == 0 ? View.INVISIBLE : View.VISIBLE);
+        headerBrand.setContentDescription(headerSlide >= .5f
+            ? "Tap to show the XBT logo." : "XBT. Tap to show the fiat exchange rate.");
     }
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private android.graphics.drawable.GradientDrawable surface(int color, int radius, int border) {
@@ -443,7 +467,7 @@ public final class MainActivity extends Activity {
                     throw new Exception("Could not save channel history.");
             }
             runOnUiThread(() -> {
-                if (!screen.equals(origin) || walletPopup != null || ((homeActionsAnimation[0] != null && homeActionsAnimation[0].isRunning()) || (homeActionsAnimation[1] != null && homeActionsAnimation[1].isRunning()))) return;
+                if (!screen.equals(origin) || walletPopup != null || (headerSlideAnimation != null && headerSlideAnimation.isRunning()) || ((homeActionsAnimation[0] != null && homeActionsAnimation[0].isRunning()) || (homeActionsAnimation[1] != null && homeActionsAnimation[1].isRunning()))) return;
                 page("Home");
                 long channelFunds = 0;
                 for (LightningOuterClass.Channel channel : active.getChannelsList())
@@ -2046,5 +2070,5 @@ public final class MainActivity extends Activity {
             error(new Exception("This QR code is not a supported Lightning invoice or Bitcoin payment address. " + e.getMessage()));
         }
     }
-    @Override protected void onDestroy() { handler.removeCallbacksAndMessages(null); if (bound) unbindService(connection); super.onDestroy(); }
+    @Override protected void onDestroy() { if (headerSlideAnimation != null) headerSlideAnimation.cancel(); handler.removeCallbacksAndMessages(null); if (bound) unbindService(connection); super.onDestroy(); }
 }
