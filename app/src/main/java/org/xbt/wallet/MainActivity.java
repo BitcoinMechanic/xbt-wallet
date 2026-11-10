@@ -159,7 +159,7 @@ public final class MainActivity extends Activity {
     }
     private void setFieldHint(EditText field, String hint) {
         android.text.SpannableString styled = new android.text.SpannableString(hint);
-        if (hint.toLowerCase(Locale.ROOT).contains("optional")) {
+        if (hint.toLowerCase(Locale.ROOT).contains("optional") || hint.equals("Leave blank for any amount")) {
             styled.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.ITALIC),
                 0, styled.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
