@@ -37,6 +37,17 @@ final class FiatRates {
         } catch (Exception ignored) { /* Show unavailable for other currencies. */ }
         return result;
     }
+    static JSONObject swapMarket(boolean useTor) throws Exception {
+        JSONObject response = get("https://neoxa.exchange/api/exchange/ticker/BTCB2_BTC", useTor);
+        if (!response.getBoolean("success") || !"BTCB2_BTC".equals(response.getString("pair")))
+            throw new Exception("Neoxa returned an unexpected market.");
+        JSONObject ticker = response.getJSONObject("ticker");
+        long timestamp = ticker.getLong("computedAt");
+        SwapPrice.requireFresh(timestamp, System.currentTimeMillis());
+        BigDecimal price = new BigDecimal(ticker.getString("lastPrice"));
+        if (price.signum() <= 0) throw new Exception("Neoxa returned an invalid XBT/BTC price.");
+        return new JSONObject().put("btc_per_xbt", price.toPlainString()).put("timestamp", timestamp);
+    }
     private static JSONObject get(String url, boolean useTor) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) (useTor ? new URL(url).openConnection(TorTransport.httpProxy()) : new URL(url).openConnection());
         connection.setConnectTimeout(useTor ? 30000 : 10000); connection.setReadTimeout(useTor ? 30000 : 10000);

@@ -1746,6 +1746,18 @@ public final class MainActivity extends Activity {
             org.json.JSONObject reply=SwapControllers.receive(api,prefs.getString("receive-key-"+record.getString("provider"),""),request,controllerTor(api));
             LightningOuterClass.PayReq decoded=reply.has("invoice") ? LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq",LightningOuterClass.PayReqString.newBuilder().setPayReq(reply.getString("invoice")).build())) : null;
             SwapReceive.validate(record,reply,decoded); record.put("reply",reply);
+            if (!reply.optBoolean("terminal")) {
+                long now = System.currentTimeMillis();
+                if (now - record.optLong("market_checked") >= 60000) {
+                    record.put("market_checked", now);
+                    record.remove("market_error");
+                    try { record.put("market", FiatRates.swapMarket(controllerTor(api))); }
+                    catch (Exception e) {
+                        record.remove("market");
+                        record.put("market_error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+                    }
+                }
+            }
         }
         if (!prefs.edit().putString("swap-receive-"+hash,record.toString()).commit()) throw new Exception("Could not save swap status.");
         runOnUiThread(() -> { if (screen.equals("Swap invoice") && hash.equals(viewingSwapHash)) showSwapReceive(record); });
@@ -1763,7 +1775,7 @@ public final class MainActivity extends Activity {
             long deadline=reply.optLong("expires_at");
             text("Sender pays "+(reply.optLong("btc_msat")/1000.0)+" BTC sats");
             text("Pay before "+java.text.DateFormat.getTimeInstance().format(new Date(deadline*1000)));
-            if (deadline>System.currentTimeMillis()/1000 && reply.has("invoice") && !reply.optBoolean("blocked")) {
+            if (deadline>System.currentTimeMillis()/1000 && reply.has("invoice") && !reply.optBoolean("blocked") && swapMarketReview(record, reply)) {
                 try {
                     String invoice=reply.getString("invoice");
                     BitMatrix matrix=new MultiFormatWriter().encode(invoice,BarcodeFormat.QR_CODE,640,640);
@@ -1781,6 +1793,39 @@ public final class MainActivity extends Activity {
             button("Retry request",()->refreshSwapReceive(record.optString("hash"),true));
         }
         button("Swap requests",this::swapReceipts); button("Home",this::home);
+    }
+    private boolean swapMarketReview(org.json.JSONObject record, org.json.JSONObject reply) {
+        String approvalKey;
+        String warning = null;
+        try {
+            org.json.JSONObject market = record.getJSONObject("market");
+            SwapPrice.requireFresh(market.getLong("timestamp"), System.currentTimeMillis());
+            java.math.BigDecimal price = new java.math.BigDecimal(market.getString("btc_per_xbt"));
+            SwapPrice comparison = new SwapPrice(reply.getLong("btc_msat"), reply.getLong("xbt_msat"), true, price);
+            text("Neoxa market: 1 XBT = " + price.stripTrailingZeros().toPlainString() + " BTC"
+                + "\nQuoted cost versus market: " + comparison.percent() + "%"
+                + "\nBased on Neoxa's last trade. Includes charges built into the swap amounts; the sender's routing fee is additional.");
+            if (!comparison.warning()) return true;
+            warning = "Warning: this swap costs " + comparison.percent() + "% more than Neoxa's market price (over 5%).";
+            approvalKey = market.toString();
+        } catch (Exception e) {
+            warning = "Warning: cannot check this swap against Neoxa's market price. "
+                + record.optString("market_error", e.getMessage() == null ? "Price unavailable." : e.getMessage());
+            approvalKey = "unavailable-" + record.optLong("market_checked");
+        }
+        TextView notice = text(warning); notice.setTextColor(0xffffc482);
+        if (approvalKey.equals(record.optString("market_accepted"))) return true;
+        final String accepted = approvalKey;
+        button("Accept rate and show invoice", () -> {
+            try {
+                record.put("market_accepted", accepted);
+                if (!prefs.edit().putString("swap-receive-" + record.getString("hash"), record.toString()).commit())
+                    throw new Exception("Could not save rate acknowledgement.");
+                showSwapReceive(record);
+            } catch (Exception e) { error(e); }
+        });
+        text("The payment QR code and copy button stay hidden until you accept this warning.");
+        return false;
     }
     private void checkLightningReceipt() {
         final ByteString hash = receivingInvoiceHash;
