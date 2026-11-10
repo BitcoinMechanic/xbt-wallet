@@ -197,7 +197,7 @@ public final class MainActivity extends Activity {
             new int[]{0xfff4e5c7, 0xffe8d2a7, 0xffd9bd8c});
         background.setStroke(dp(1), 0xffb79867);
         qr.setBackground(background);
-        int gap = dp(1);
+        int gap = 0;
         qr.setPadding(gap, gap, gap, gap);
         int edge = Math.min(height + 2 * gap, getResources().getDisplayMetrics().widthPixels - dp(40));
         LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(edge, edge);
