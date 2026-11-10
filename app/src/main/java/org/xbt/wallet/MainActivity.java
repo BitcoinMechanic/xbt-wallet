@@ -1511,7 +1511,7 @@ public final class MainActivity extends Activity {
         controller.setVisibility(View.GONE);
         Button receipts = button("Swap requests", this::swapReceipts); receipts.setVisibility(View.GONE);
         swaps.setOnCheckedChangeListener((v,enabled) -> {
-            amountTitle.setText(enabled ? "XBT amount to receive" : "Amount");
+            amountTitle.setText("Amount");
             amount.setHint(enabled ? "Required for swaps" : "Optional");
             memo.setHint(enabled ? "Optional - for your XBT invoice" : "Optional - sender can see this");
             controller.setVisibility(enabled ? View.VISIBLE : View.GONE); receipts.setVisibility(enabled ? View.VISIBLE : View.GONE);
