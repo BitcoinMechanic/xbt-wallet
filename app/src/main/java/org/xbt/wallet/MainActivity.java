@@ -319,7 +319,7 @@ public final class MainActivity extends Activity {
     private void homeBalances(long onChain, long channelFunds) {
         balanceSats[0] = onChain; balanceSats[1] = channelFunds;
         balanceDropdown(0, "On chain", this::sendOnChain, this::deposit);
-        balanceDropdown(1, "Lightning funds", this::payment, this::receiveLightning);
+        balanceDropdown(1, "Lightning", this::payment, this::receiveLightning);
         updateBalanceAmounts();
     }
     private void balanceDropdown(int index, String label, Runnable sendAction, Runnable receiveAction) {
