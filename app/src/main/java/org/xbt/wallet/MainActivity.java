@@ -444,7 +444,9 @@ public final class MainActivity extends Activity {
             currency = new Button(MainActivity.this); styleButton(currency, false); currency.setText("sats");
             LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(82), -2); size.leftMargin = dp(8);
             row.addView(currency, size); page.addView(row);
-            equivalent = text(""); equivalent.setTextSize(13); equivalent.setVisibility(View.GONE);
+            equivalent = text(""); equivalent.setTextSize(13);
+            equivalent.setTypeface(equivalent.getTypeface(), android.graphics.Typeface.ITALIC);
+            equivalent.setVisibility(View.GONE);
             activeAmountEntry = this;
             currency.setContentDescription("Amount currency. Tap to cycle sats, XBT and fiat.");
             currency.setOnClickListener(v -> {
@@ -483,7 +485,7 @@ public final class MainActivity extends Activity {
             if (row.getVisibility() == View.VISIBLE && !input.getText().toString().trim().isEmpty() && !code.equals("Off")) {
                 try {
                     long amount = sats();
-                    value = unit == 2 ? amount + " sats" : BalanceDisplay.format(amount, 2, code, amountPrice());
+                    value = unit == 2 ? String.format(Locale.US, "%,d sats", amount) : BalanceDisplay.format(amount, 2, code, amountPrice());
                 } catch (IllegalArgumentException ignored) {
                     if (unit == 2 && amountPrice() == null) value = "Exchange rate unavailable";
                 }
