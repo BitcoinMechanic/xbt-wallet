@@ -155,7 +155,29 @@ public final class MainActivity extends Activity {
         });
         scroll.addView(page); setContentView(scroll);
         FrameLayout header = new FrameLayout(this); pageHeader = header;
-        ImageView brand = new ImageView(this); headerBrand = brand;
+        ImageView brand = new ImageView(this) {
+            @Override protected void onDraw(android.graphics.Canvas canvas) {
+                if (!prefs.getBoolean("header-fiat-rate", false)) { super.onDraw(canvas); return; }
+                // Keep the original rope flourishes; clip out just the central lettering.
+                android.graphics.drawable.Drawable logo = getDrawable();
+                if (logo == null) return;
+                float scale = Math.min((float) getWidth() / logo.getIntrinsicWidth(), (float) getHeight() / logo.getIntrinsicHeight());
+                float w = logo.getIntrinsicWidth() * scale, h = logo.getIntrinsicHeight() * scale;
+                float x = (getWidth() - w) / 2, y = (getHeight() - h) / 2;
+                android.graphics.Path wings = new android.graphics.Path();
+                for (int side = 0; side < 2; side++) {
+                    float[][] outline = {{0,.38f},{.25f,.38f},{.33f,.56f},{.25f,.72f},{0,.72f}};
+                    for (int i = 0; i < outline.length; i++) {
+                        float px = x + (side == 0 ? outline[i][0] : 1 - outline[i][0]) * w;
+                        float py = y + outline[i][1] * h;
+                        if (i == 0) wings.moveTo(px, py); else wings.lineTo(px, py);
+                    }
+                    wings.close();
+                }
+                int saved = canvas.save(); canvas.clipPath(wings);
+                super.onDraw(canvas); canvas.restoreToCount(saved);
+            }
+        }; headerBrand = brand;
         brand.setImageResource(org.xbt.wallet.R.drawable.xbt_logo);
         brand.setContentDescription("XBT. Tap to show the fiat exchange rate.");
         brand.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -164,7 +186,8 @@ public final class MainActivity extends Activity {
         headerRate.setGravity(Gravity.CENTER); headerRate.setTextSize(20);
         headerRate.setTextColor(0xffe8d2a7);
         headerRate.setMaxLines(3);
-        header.addView(headerRate, new FrameLayout.LayoutParams(dp(200), dp(72), Gravity.CENTER));
+        headerRate.setAutoSizeTextTypeUniformWithConfiguration(8, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+        header.addView(headerRate, new FrameLayout.LayoutParams(dp(70), dp(72), Gravity.CENTER));
         View.OnClickListener toggleRate = v -> {
             prefs.edit().putBoolean("header-fiat-rate", !prefs.getBoolean("header-fiat-rate", false)).apply();
             updateHeaderRate();
@@ -191,7 +214,8 @@ public final class MainActivity extends Activity {
     private void updateHeaderRate() {
         if (headerBrand == null || headerRate == null) return;
         boolean show = prefs.getBoolean("header-fiat-rate", false);
-        headerBrand.setVisibility(show ? View.GONE : View.VISIBLE);
+        headerBrand.setVisibility(View.VISIBLE);
+        headerBrand.invalidate();
         headerRate.setVisibility(show ? View.VISIBLE : View.GONE);
         if (!show) return;
         String currency = prefs.getString("fiat-currency", "USD");
