@@ -192,10 +192,22 @@ public final class MainActivity extends Activity {
     }
     private void addQrFrame(ImageView qr, int height) {
         qr.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        android.graphics.drawable.GradientDrawable background = new android.graphics.drawable.GradientDrawable(
-            android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
-            new int[]{0xfff4e5c7, 0xffe8d2a7, 0xffd9bd8c});
-        background.setStroke(dp(1), 0xffb79867);
+        int[] rope = {0xfff4e5c7, 0xffe8d2a7, 0xffd9bd8c};
+        int steps = Math.max(1, dp(6));
+        android.graphics.drawable.Drawable[] layers = new android.graphics.drawable.Drawable[steps + 1];
+        android.animation.ArgbEvaluator blend = new android.animation.ArgbEvaluator();
+        for (int i = 0; i <= steps; i++) {
+            float progress = (float) i / steps;
+            float softened = progress * progress * (3 - 2 * progress);
+            int[] colors = new int[rope.length];
+            for (int j = 0; j < rope.length; j++) colors[j] = (Integer) blend.evaluate(softened, 0xff101517, rope[j]);
+            android.graphics.drawable.GradientDrawable layer = new android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR, colors);
+            layer.setCornerRadius(Math.max(0, dp(14) - i));
+            layers[i] = layer;
+        }
+        android.graphics.drawable.LayerDrawable background = new android.graphics.drawable.LayerDrawable(layers);
+        for (int i = 0; i <= steps; i++) background.setLayerInset(i, i, i, i, i);
         qr.setBackground(background);
         int gap = 0;
         qr.setPadding(gap, gap, gap, gap);
