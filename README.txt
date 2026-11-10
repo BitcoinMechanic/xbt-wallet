@@ -77,7 +77,11 @@ Two-emulator desktop testing (2026-11-10):
   Zeus: AVD zeus-test, serial emulator-5556, fresh Android storage.
   Always specify adb -s emulator-5554 or -s emulator-5556; never assume the
   default device when operating on wallet data or installing an APK.
-  Zeus runs with two virtual CPUs, 2 GiB RAM, software graphics and no snapshots.
+  Both launchers request two virtual CPUs, 2 GiB RAM, software graphics and no
+  snapshots (Android may raise the RAM minimum). Persistent wallet data is retained.
+  Local AVD config.ini files use hw.lcd.vsync=30 to reduce rendering load.
+  GNOME check-alive-timeout is 30000 ms (previously 5000); hang detection remains
+  enabled. Restore with: gsettings reset org.gnome.mutter check-alive-timeout
   Start: systemctl --user start zeus-emulator.service
   Stop:  systemctl --user stop zeus-emulator.service
   Desktop launcher: Zeus BTC Emulator
