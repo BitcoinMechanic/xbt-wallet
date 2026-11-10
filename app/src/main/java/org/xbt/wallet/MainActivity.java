@@ -145,6 +145,14 @@ public final class MainActivity extends Activity {
         states.addState(new int[]{}, surface(accent ? 0xffa8efd5 : 0xff1d2723, 14, accent ? 0 : 0xff304037));
         button.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x336de8b1), states, null));
     }
+    private void addQrFrame(ImageView qr, int height) {
+        qr.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        qr.setBackground(surface(0xffffffff, 12, 0xff8d9f94));
+        qr.setPadding(dp(8), dp(8), dp(8), dp(8));
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, height + dp(16));
+        size.topMargin = dp(8); size.bottomMargin = dp(8);
+        page.addView(qr, size);
+    }
     private TextView text(String value) {
         TextView view = new TextView(this); view.setText(value); view.setTextSize(15);
         view.setTextColor(0xffafbeb6); view.setLineSpacing(dp(3), 1f);
@@ -1123,7 +1131,7 @@ public final class MainActivity extends Activity {
                 AmountEntry entry = new AmountEntry("Amount (optional)", "Leave blank for any amount");
                 EditText amount = entry.input;
                 ImageView qr = new ImageView(this); qr.setContentDescription("Deposit payment request QR code");
-                page.addView(qr, new LinearLayout.LayoutParams(-1, Math.round((getResources().getDisplayMetrics().widthPixels - 56) * UI_SCALE)));
+                addQrFrame(qr, Math.round((getResources().getDisplayMetrics().widthPixels - 56) * UI_SCALE));
                 TextView validation = text(""); validation.setVisibility(View.GONE);
                 final String[] request = {address};
                 Button copy = button("Copy payment request", () -> {
@@ -1548,7 +1556,7 @@ public final class MainActivity extends Activity {
                     receivingInvoiceHash = result.getRHash();
                     page("Lightning invoice"); text((sats == 0 ? "Sender chooses the amount" : displayAmount(sats)) + " · Expires in 1 hour");
                     ImageView qr = new ImageView(this); qr.setImageBitmap(bitmap); qr.setContentDescription("Lightning invoice QR code");
-                    page.addView(qr, new LinearLayout.LayoutParams(-1, Math.round((getResources().getDisplayMetrics().widthPixels - 56) * UI_SCALE)));
+                    addQrFrame(qr, Math.round((getResources().getDisplayMetrics().widthPixels - 56) * UI_SCALE));
                     button("Copy invoice", () -> {
                         getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Lightning invoice", invoice));
                         Toast.makeText(this, "Invoice copied", Toast.LENGTH_SHORT).show();
@@ -1648,7 +1656,7 @@ public final class MainActivity extends Activity {
                     Bitmap bitmap=Bitmap.createBitmap(640,640,Bitmap.Config.ARGB_8888);
                     for(int y=0;y<640;y++) for(int x=0;x<640;x++) bitmap.setPixel(x,y,matrix.get(x,y)?0xff000000:0xffffffff);
                     ImageView qr=new ImageView(this);qr.setImageBitmap(bitmap);qr.setContentDescription("BTC Lightning invoice QR code");
-                    page.addView(qr,new LinearLayout.LayoutParams(-1,dp(280)));
+                    addQrFrame(qr, dp(280));
                     button("Copy BTC invoice",()->getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("BTC Lightning invoice",invoice)));
                     text(invoice);
                 } catch(Exception e) { error(e); }
