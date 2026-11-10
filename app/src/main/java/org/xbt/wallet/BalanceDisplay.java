@@ -6,7 +6,7 @@ import java.util.Currency;
 
 final class BalanceDisplay {
     static String format(long sats, int unit, String currency, BigDecimal price) {
-        if (unit == 0) return sats + " sats";
+        if (unit == 0) return String.format(java.util.Locale.US, "%,d sats", sats);
         BigDecimal coins = BigDecimal.valueOf(sats, 8);
         if (unit == 1) return coins.stripTrailingZeros().toPlainString() + " XBT";
         if (price == null) return currency + " —";

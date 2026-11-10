@@ -4,7 +4,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 public class BalanceDisplayTest {
     @Test public void satsAndXbtPreserveExactAmounts() {
-        assertEquals("123456789 sats", BalanceDisplay.format(123456789,0,"USD",null));
+        assertEquals("123,456,789 sats", BalanceDisplay.format(123456789,0,"USD",null));
         assertEquals("1.23456789 XBT", BalanceDisplay.format(123456789,1,"USD",null));
         assertEquals("0.00000001 XBT", BalanceDisplay.format(1,1,"USD",null));
         assertEquals("0 XBT", BalanceDisplay.format(0,1,"USD",null));

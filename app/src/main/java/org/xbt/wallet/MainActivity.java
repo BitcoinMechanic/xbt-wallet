@@ -304,7 +304,7 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.PendingChannelsResponse.ClosedChannel c : pending.getPendingClosingChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 for (LightningOuterClass.PendingChannelsResponse.ForceClosedChannel c : pending.getPendingForceClosingChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 for (LightningOuterClass.PendingChannelsResponse.WaitingCloseChannel c : pending.getWaitingCloseChannelsList()) hasPublic |= !c.getChannel().getPrivate();
-                if (hasPublic) text("Required on-chain reserve: " + balance.getReservedBalanceAnchorChan() + " sats");
+                if (hasPublic) text("Required on-chain reserve: " + displayAmount(balance.getReservedBalanceAnchorChan()));
             });
         });
     }
@@ -344,8 +344,8 @@ public final class MainActivity extends Activity {
         balanceAmounts[index] = amount;
         amount.setOnClickListener(v -> {
             int count = prefs.getString("fiat-currency", "USD").equals("Off") ? 2 : 3;
-            int unit = (prefs.getInt("balance-unit-" + index, 0) + 1) % count;
-            prefs.edit().putInt("balance-unit-" + index, unit).apply();
+            int unit = (displayUnit() + 1) % count;
+            prefs.edit().putInt("display-unit", unit).apply();
             updateBalanceAmounts();
         });
         LinearLayout.LayoutParams amountSize = new LinearLayout.LayoutParams(0, -2, 1); amountSize.leftMargin = dp(8);
@@ -373,7 +373,7 @@ public final class MainActivity extends Activity {
         } catch (Exception ignored) {}
         boolean needsFiat = false;
         for (int i = 0; i < 2; i++) {
-            int unit = prefs.getInt("balance-unit-" + i, 0);
+            int unit = displayUnit();
             if (code.equals("Off") && unit == 2) unit = 0;
             needsFiat |= unit == 2;
             if (balanceAmounts[i] != null) {
@@ -407,6 +407,13 @@ public final class MainActivity extends Activity {
             });
         }, "fiat-rates").start();
     }
+    private int displayUnit() {
+        int unit = prefs.getInt("display-unit", 0);
+        return unit < 0 || unit > 2 || (unit == 2 && prefs.getString("fiat-currency", "USD").equals("Off")) ? 0 : unit;
+    }
+    private String displayAmount(long sats) {
+        return BalanceDisplay.format(sats, displayUnit(), prefs.getString("fiat-currency", "USD"), amountPrice());
+    }
     private java.math.BigDecimal amountPrice() {
         try {
             org.json.JSONObject rates = fiatRates == null ? new org.json.JSONObject(prefs.getString("fiat-rates", "{}")) : fiatRates;
@@ -435,13 +442,14 @@ public final class MainActivity extends Activity {
         Runnable changed = () -> {};
         boolean changing;
         AmountEntry(String heading, String hint) {
+            unit = displayUnit();
             title = text(heading);
             input = field(hint, ""); page.removeView(input);
             input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
-            input.setContentDescription(heading + " in sats");
+            input.setContentDescription(heading + " in " + unitLabel());
             row = new LinearLayout(MainActivity.this); row.setGravity(Gravity.CENTER_VERTICAL);
             row.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
-            currency = new Button(MainActivity.this); styleButton(currency, false); currency.setText("sats");
+            currency = new Button(MainActivity.this); styleButton(currency, false); currency.setText(unitLabel());
             LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(82), -2); size.leftMargin = dp(8);
             row.addView(currency, size); page.addView(row);
             equivalent = text(""); equivalent.setTextSize(13);
@@ -454,11 +462,14 @@ public final class MainActivity extends Activity {
                     int next = (unit + 1) % (prefs.getString("fiat-currency", "USD").equals("Off") ? 2 : 3);
                     java.math.BigDecimal price = amountPrice();
                     Long value = input.getText().toString().trim().isEmpty() ? null : sats();
-                    if (next == 2 && price == null) { fetchFiatRates(); throw new Exception("Fetching an exchange rate. Try again shortly or use sats/XBT."); }
+                    if (value != null && next == 2 && price == null) { fetchFiatRates(); throw new Exception("Fetching an exchange rate. Try again shortly or use sats/XBT."); }
+                    // Compute before changing units, so a failed conversion leaves the form intact.
+                    String converted = value == null ? null : AmountUnits.input(value, next, price);
                     changing = true; unit = next;
-                    currency.setText(unit == 0 ? "sats" : unit == 1 ? "XBT" : prefs.getString("fiat-currency", "USD"));
+                    prefs.edit().putInt("display-unit", unit).apply();
+                    currency.setText(unitLabel());
                     input.setContentDescription(heading + " in " + currency.getText());
-                    if (value != null) setSats(value);
+                    if (value != null) { exactText = converted; exactSats = value; input.setText(converted); }
                 } catch (Exception e) { error(e); }
                 finally { changing = false; changed.run(); updateEquivalent(); }
             });
@@ -469,6 +480,7 @@ public final class MainActivity extends Activity {
             });
             if (!prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         }
+        String unitLabel() { return unit == 0 ? "sats" : unit == 1 ? "XBT" : prefs.getString("fiat-currency", "USD"); }
         long sats() {
             if (exactSats != null && input.getText().toString().equals(exactText)) return exactSats;
             return AmountUnits.sats(input.getText().toString(), unit, amountPrice());
@@ -510,10 +522,9 @@ public final class MainActivity extends Activity {
             .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                 android.content.SharedPreferences.Editor edit = prefs.edit();
                 edit.putString("fiat-currency", which == 0 ? "Off" : FiatRates.CURRENCIES[which - 1]);
-                if (which == 0) for (int i = 0; i < 2; i++) {
-                    if (prefs.getInt("balance-unit-" + i, 0) == 2) edit.putInt("balance-unit-" + i, 0);
-                }
+                if (which == 0 && prefs.getInt("display-unit", 0) == 2) edit.putInt("display-unit", 0);
                 edit.apply();
+                updateBalanceAmounts();
                 dialog.dismiss();
             }).setNegativeButton("Cancel", null).show();
     }
@@ -568,7 +579,7 @@ public final class MainActivity extends Activity {
                 else text("Tap an output to edit its label.");
                 for (LightningOuterClass.Utxo coin : outputs.getUtxosList()) {
                     String label = coinLabel(coin);
-                    button((label.isEmpty() ? "Unlabelled output" : label) + "\n" + coin.getAmountSat() + " sats · " + coin.getConfirmations() + " confirmations\n" + outpoint(coin), () -> labelCoin(coin));
+                    button((label.isEmpty() ? "Unlabelled output" : label) + "\n" + displayAmount(coin.getAmountSat()) + " · " + coin.getConfirmations() + " confirmations\n" + outpoint(coin), () -> labelCoin(coin));
                 }
                 button("Refresh", this::utxos); button("Home", this::home);
             });
@@ -612,7 +623,7 @@ public final class MainActivity extends Activity {
         });
     }
     private String channelBalances(long local, long remote) {
-        return "Local: " + local + " sats\nRemote: " + remote + " sats";
+        return "Local: " + displayAmount(local) + "\nRemote: " + displayAmount(remote);
     }
     private void pendingChannelDetails(LightningOuterClass.PendingChannelsResponse.PendingChannel channel, String status) {
         page("Pending channel details");
@@ -940,7 +951,7 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 page("Closed-channel history");
                 if (closed.getChannelsCount() == 0) text("No closed channels.");
-                for (LightningOuterClass.ChannelCloseSummary c : closed.getChannelsList()) text(channelLabelPrefix(c.getChannelPoint()) + c.getCapacity() + " sats · " + c.getCloseType().name() + "\n" + c.getChannelPoint());
+                for (LightningOuterClass.ChannelCloseSummary c : closed.getChannelsList()) text(channelLabelPrefix(c.getChannelPoint()) + displayAmount(c.getCapacity()) + " · " + c.getCloseType().name() + "\n" + c.getChannelPoint());
                 button("Back", this::advanced);
             });
         });
@@ -975,14 +986,14 @@ public final class MainActivity extends Activity {
             for (LightningOuterClass.Transaction tx : transactions.getTransactionsList()) {
                 String direction = tx.getAmount() > 0 ? "On-chain received" : tx.getAmount() < 0 ? "On-chain sent / channel funding" : "On-chain transaction";
                 String status = tx.getNumConfirmations() < 0 ? "Conflicted" : tx.getNumConfirmations() == 0 ? "Unconfirmed" : tx.getNumConfirmations() + " confirmations";
-                onChain.computeIfAbsent(tx.getTimeStamp(), key -> new ArrayList<>()).add(new HistoryEntry("tx-label-" + tx.getTxHash(), transactionHistoryLabel(tx), direction + " · " + Math.abs(tx.getAmount()) + " sats\n" + status + "\n" + tx.getTxHash()));
+                onChain.computeIfAbsent(tx.getTimeStamp(), key -> new ArrayList<>()).add(new HistoryEntry("tx-label-" + tx.getTxHash(), transactionHistoryLabel(tx), direction + " · " + displayAmount(Math.abs(tx.getAmount())) + "\n" + status + "\n" + tx.getTxHash()));
             }
             for (LightningOuterClass.Payment p : payments.getPaymentsList())
-                lightning.computeIfAbsent(p.getCreationTimeNs() / 1000000000L, key -> new ArrayList<>()).add(new HistoryEntry("payment-label-" + p.getPaymentHash(), "", "Lightning sent · " + p.getValueSat() + " sats\n" + p.getStatus().name() + "\n" + p.getPaymentHash()));
+                lightning.computeIfAbsent(p.getCreationTimeNs() / 1000000000L, key -> new ArrayList<>()).add(new HistoryEntry("payment-label-" + p.getPaymentHash(), "", "Lightning sent · " + displayAmount(p.getValueSat()) + "\n" + p.getStatus().name() + "\n" + p.getPaymentHash()));
             for (LightningOuterClass.Invoice invoice : invoices.getInvoicesList()) {
                 if (invoice.getState() != LightningOuterClass.Invoice.InvoiceState.SETTLED) continue;
                 lightning.computeIfAbsent(invoice.getSettleDate(), key -> new ArrayList<>()).add(new HistoryEntry("invoice-label-" + android.util.Base64.encodeToString(invoice.getRHash().toByteArray(), android.util.Base64.NO_WRAP), "",
-                    "Lightning received · " + invoice.getAmtPaidSat() + " sats\nSettled" + (invoice.getMemo().isEmpty() ? "" : "\nDescription: " + invoice.getMemo())));
+                    "Lightning received · " + displayAmount(invoice.getAmtPaidSat()) + "\nSettled" + (invoice.getMemo().isEmpty() ? "" : "\nDescription: " + invoice.getMemo())));
             }
             boolean limited = payments.getPaymentsCount() == 100 || invoices.getInvoicesCount() == 100;
             runOnUiThread(() -> renderPaymentHistory(onChain, lightning, limited));
@@ -1184,35 +1195,30 @@ public final class MainActivity extends Activity {
                 page("Open Channel"); text("Select outputs and enter the funds to use.");
                 List<LightningOuterClass.Utxo> selected = new ArrayList<>();
                 Map<CheckBox, LightningOuterClass.Utxo> coinBoxes = new LinkedHashMap<>();
-                for (LightningOuterClass.Utxo coin : unspent.getUtxosList()) { CheckBox box = new CheckBox(this); box.setText((coinLabel(coin).isEmpty() ? "" : coinLabel(coin) + " · ") + coin.getAmountSat() + " sats · " + coin.getOutpoint().getTxidStr() + ":" + coin.getOutpoint().getOutputIndex()); page.addView(box); coinBoxes.put(box, coin); }
-                EditText peer = field("pubkey@host:port", ""), amount = field("Funds to use", ""), fee = field("Fee rate in sats/vbyte", "1");
+                for (LightningOuterClass.Utxo coin : unspent.getUtxosList()) { CheckBox box = new CheckBox(this); box.setText((coinLabel(coin).isEmpty() ? "" : coinLabel(coin) + " · ") + displayAmount(coin.getAmountSat()) + " · " + coin.getOutpoint().getTxidStr() + ":" + coin.getOutpoint().getOutputIndex()); page.addView(box); coinBoxes.put(box, coin); }
+                EditText peer = field("pubkey@host:port", "");
+                AmountEntry funds = new AmountEntry("Funds to use", "");
+                EditText amount = funds.input, fee = field("Fee rate in sats/vbyte", "1");
                 CheckBox useAll = new CheckBox(this); useAll.setText("Use all selected funds"); page.addView(useAll);
-                amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
                 final String[] manualCapacity = {""};
                 Runnable updateTotal = () -> {
                     if (!useAll.isChecked()) return;
                     long total = 0;
                     for (LightningOuterClass.Utxo coin : selected) total = Math.addExact(total, coin.getAmountSat());
-                    amount.setText(Long.toString(total));
+                    try { funds.setSats(total); }
+                    catch (IllegalArgumentException e) { amount.setText(""); error(e); }
                 };
-                for (Map.Entry<CheckBox, LightningOuterClass.Utxo> entry : coinBoxes.entrySet()) {
-                    entry.getKey().setOnCheckedChangeListener((view, checked) -> {
-                        if (checked) selected.add(entry.getValue()); else selected.remove(entry.getValue());
-                        updateTotal.run();
-                    });
-                }
-                useAll.setOnCheckedChangeListener((view, checked) -> {
-                    if (checked) { manualCapacity[0] = amount.getText().toString(); updateTotal.run(); }
-                    else amount.setText(manualCapacity[0]);
-                    amount.setEnabled(!checked);
-                });
                 CheckBox publicChannel = new CheckBox(this); publicChannel.setText("Public channel"); page.addView(publicChannel);
                 TextView breakdown = text("Network fee: —\nChannel capacity: —");
                 Runnable updateBreakdown = () -> {
+                    for (Map.Entry<CheckBox, LightningOuterClass.Utxo> item : coinBoxes.entrySet()) {
+                        LightningOuterClass.Utxo coin = item.getValue();
+                        item.getKey().setText((coinLabel(coin).isEmpty() ? "" : coinLabel(coin) + " · ") + displayAmount(coin.getAmountSat()) + " · " + outpoint(coin));
+                    }
                     try {
                         FundingPreview plan = calculateFundingPreview(selected, unspent, previewWallet,
-                            Policy.amount(amount.getText().toString()), Policy.amount(fee.getText().toString()), publicChannel.isChecked());
-                        breakdown.setText("Estimated network fee: " + plan.fee + " sats" + (publicChannel.isChecked() ? "\nReserve kept from these funds: " + plan.reserve + " sats" : "") + "\nChannel capacity: " + plan.capacity + " sats");
+                            funds.sats(), Policy.amount(fee.getText().toString()), publicChannel.isChecked());
+                        breakdown.setText("Estimated network fee: " + displayAmount(plan.fee) + (publicChannel.isChecked() ? "\nReserve kept from these funds: " + displayAmount(plan.reserve) : "") + "\nChannel capacity: " + displayAmount(plan.capacity));
                     } catch (Exception e) { breakdown.setText("Network fee: —" + (publicChannel.isChecked() ? "\nReserve kept on-chain: —" : "") + "\nChannel capacity: —\n" + e.getMessage()); }
                 };
                 android.text.TextWatcher watcher = new android.text.TextWatcher() {
@@ -1220,7 +1226,12 @@ public final class MainActivity extends Activity {
                     public void onTextChanged(CharSequence s, int start, int before, int count) { updateBreakdown.run(); }
                     public void afterTextChanged(android.text.Editable value) {}
                 };
-                amount.addTextChangedListener(watcher); fee.addTextChangedListener(watcher);
+                funds.changed = updateBreakdown; fee.addTextChangedListener(watcher);
+                useAll.setOnCheckedChangeListener((view, checked) -> {
+                    if (checked) { manualCapacity[0] = amount.getText().toString(); updateTotal.run(); }
+                    else amount.setText(manualCapacity[0]);
+                    funds.enabled(!checked); updateBreakdown.run();
+                });
                 publicChannel.setOnCheckedChangeListener((view, checked) -> updateBreakdown.run());
                 for (Map.Entry<CheckBox, LightningOuterClass.Utxo> entry : coinBoxes.entrySet()) {
                     entry.getKey().setOnCheckedChangeListener((view, checked) -> {
@@ -1232,7 +1243,7 @@ public final class MainActivity extends Activity {
                 button("Review channel", () -> {
                     try {
                         String[] p = Policy.peer(peer.getText().toString());
-                        long budget = Policy.amount(amount.getText().toString()), rate = Policy.amount(fee.getText().toString());
+                        long budget = funds.sats(), rate = Policy.amount(fee.getText().toString());
                         boolean publish = publicChannel.isChecked();
                         List<LightningOuterClass.Utxo> chosen = new ArrayList<>(selected);
                         work(() -> {
@@ -1244,10 +1255,10 @@ public final class MainActivity extends Activity {
                             for (LightningOuterClass.Utxo c : chosen) req.addOutpoints(c.getOutpoint());
                             runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Open XBT channel?")
                                 .setMessage((publish ? "Public channel" : "Private channel")
-                                    + "\nFunds to use: " + budget + " sats"
-                                    + "\nEstimated network fee: " + plan.fee + " sats"
-                                    + (publish ? "\nReserve kept from these funds: " + plan.reserve + " sats" : "")
-                                    + "\nChannel capacity: " + plan.capacity + " sats"
+                                    + "\nFunds to use: " + displayAmount(budget)
+                                    + "\nEstimated network fee: " + displayAmount(plan.fee)
+                                    + (publish ? "\nReserve kept from these funds: " + displayAmount(plan.reserve) : "")
+                                    + "\nChannel capacity: " + displayAmount(plan.capacity)
                                     + "\nFee rate: " + rate + " sats/vbyte")
                             .setNegativeButton("Cancel", null).setPositiveButton("Open Channel", (d,w) -> work(() -> {
                                 FundingPreview fresh = fundingPreview(chosen, budget, rate, publish);
@@ -1318,9 +1329,9 @@ public final class MainActivity extends Activity {
             selected.size(), max && address.trim().isEmpty() ? 172 : OnChainPayment.outputWeight(address), amount, rate, max);
     }
     private String paymentSummary(OnChainPayment plan) {
-        return "Recipient receives: " + plan.amount + " sats\nEstimated network fee: " + plan.fee
-            + " sats\nTotal including fee: " + plan.total + " sats"
-            + (plan.reserve > 0 ? "\nReserve retained: " + plan.reserve + " sats" : "");
+        return "Recipient receives: " + displayAmount(plan.amount) + "\nEstimated network fee: " + displayAmount(plan.fee)
+            + "\nTotal including fee: " + displayAmount(plan.total)
+            + (plan.reserve > 0 ? "\nReserve retained: " + displayAmount(plan.reserve) : "");
     }
     private void onChainForm(LightningOuterClass.ListUnspentResponse available, LightningOuterClass.WalletBalanceResponse wallet) {
         page("Send on chain");
@@ -1329,11 +1340,11 @@ public final class MainActivity extends Activity {
         text("Select UTXOs to spend");
         for (LightningOuterClass.Utxo coin : available.getUtxosList()) {
             CheckBox box = new CheckBox(this);
-            box.setText((coinLabel(coin).isEmpty() ? "Unlabelled output" : coinLabel(coin)) + " · " + coin.getAmountSat() + " sats\n" + outpoint(coin));
+            box.setText((coinLabel(coin).isEmpty() ? "Unlabelled output" : coinLabel(coin)) + " · " + displayAmount(coin.getAmountSat()) + "\n" + outpoint(coin));
             page.addView(box); boxes.put(box, coin);
         }
         if (boxes.isEmpty()) text("No confirmed UTXOs available.");
-        TextView selectedTotal = text("Selected: 0 sats");
+        TextView selectedTotal = text("Selected: " + displayAmount(0));
         EditText address = field("Recipient XBT address", "");
         AmountEntry entry = new AmountEntry("Amount", "");
         EditText amount = entry.input;
@@ -1348,10 +1359,14 @@ public final class MainActivity extends Activity {
         Runnable update = () -> {
             if (updating[0]) return;
             updating[0] = true;
+            for (Map.Entry<CheckBox, LightningOuterClass.Utxo> item : boxes.entrySet()) {
+                LightningOuterClass.Utxo coin = item.getValue();
+                item.getKey().setText((coinLabel(coin).isEmpty() ? "Unlabelled output" : coinLabel(coin)) + " · " + displayAmount(coin.getAmountSat()) + "\n" + outpoint(coin));
+            }
             try {
                 long total = 0;
                 for (LightningOuterClass.Utxo coin : selected) total = Math.addExact(total, coin.getAmountSat());
-                selectedTotal.setText("Selected: " + total + " sats");
+                selectedTotal.setText("Selected: " + displayAmount(total));
                 OnChainPayment.Request request = OnChainPayment.parse(address.getText().toString());
                 OnChainPayment plan = onChainPreview(selected, available, wallet, request.address,
                     useAll.isChecked() ? 0 : entry.sats(), Policy.amount(fee.getText().toString()), useAll.isChecked());
@@ -1523,7 +1538,7 @@ public final class MainActivity extends Activity {
                 for (int y = 0; y < 640; y++) for (int x = 0; x < 640; x++) bitmap.setPixel(x, y, matrix.get(x,y) ? 0xff000000 : 0xffffffff);
                 runOnUiThread(() -> {
                     receivingInvoiceHash = result.getRHash();
-                    page("Lightning invoice"); text((sats == 0 ? "Sender chooses the amount" : sats + " sats") + " · Expires in 1 hour");
+                    page("Lightning invoice"); text((sats == 0 ? "Sender chooses the amount" : displayAmount(sats)) + " · Expires in 1 hour");
                     ImageView qr = new ImageView(this); qr.setImageBitmap(bitmap); qr.setContentDescription("Lightning invoice QR code");
                     page.addView(qr, new LinearLayout.LayoutParams(-1, Math.round((getResources().getDisplayMetrics().widthPixels - 56) * UI_SCALE)));
                     button("Copy invoice", () -> {
@@ -1564,7 +1579,7 @@ public final class MainActivity extends Activity {
         try {
             for (String name:prefs.getAll().keySet()) if (name.startsWith("swap-receive-")) records.add(new org.json.JSONObject(prefs.getString(name,"{}")));
             records.sort((a,b)->Long.compare(b.optLong("created"),a.optLong("created")));
-            for (org.json.JSONObject r:records) button(r.optLong("sats")+" XBT sats · "+swapReceiveState(r),()->showSwapReceive(r));
+            for (org.json.JSONObject r:records) button(displayAmount(r.optLong("sats"))+" · "+swapReceiveState(r),()->showSwapReceive(r));
             if (records.isEmpty()) text("No swap requests yet.");
         } catch(Exception e) { error(e); }
         button("Back",this::receiveLightning);
@@ -1607,7 +1622,7 @@ public final class MainActivity extends Activity {
     }
     private void showSwapReceive(org.json.JSONObject record) {
         page("Swap invoice"); viewingSwapHash=record.optString("hash");
-        text("Receive "+record.optLong("sats")+" XBT sats"); text(swapReceiveState(record));
+        text("Receive "+displayAmount(record.optLong("sats"))); text(swapReceiveState(record));
         if (record.has("last_error")) text(record.optString("last_error"));
         if (record.optBoolean("not_found") && !record.optBoolean("dismissed")) button("Dismiss uncreated request", () -> {
             try { record.put("dismissed",true); prefs.edit().putString("swap-receive-"+record.getString("hash"),record.toString()).commit(); swapReceipts(); }
@@ -1694,7 +1709,7 @@ public final class MainActivity extends Activity {
                 if (!Policy.invoiceAllowed(true, msats, pay.getTimestamp(), pay.getExpiry(), System.currentTimeMillis()/1000)) throw new Exception("This invoice has expired or has an invalid amount.");
                 if (prefs.contains("payment-" + pay.getPaymentHash())) throw new Exception("This invoice already has a recorded attempt. Reconcile its status before retrying.");
                 long feeLimit = Math.max(1, msats/1000/100);
-                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Pay XBT invoice?").setMessage(amountReview(msats, reviewPrice) + "\nMaximum routing fee: " + feeLimit + " sats\nRecipient: " + pay.getDestination())
+                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Pay XBT invoice?").setMessage(amountReview(msats, reviewPrice) + "\nMaximum routing fee: " + displayAmount(feeLimit) + "\nRecipient: " + pay.getDestination())
                     .setNegativeButton("Cancel",null).setPositiveButton("Pay",(d,w)->work(()->{
                         if (!prefs.edit().putString("payment-" + pay.getPaymentHash(), "submitted").putString("payment-label-" + pay.getPaymentHash(), paymentLabel).commit()) throw new Exception("Could not record payment");
                         routerrpc.RouterOuterClass.SendPaymentRequest.Builder request = routerrpc.RouterOuterClass.SendPaymentRequest.newBuilder()
