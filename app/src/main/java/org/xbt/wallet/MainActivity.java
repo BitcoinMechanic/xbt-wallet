@@ -1364,7 +1364,9 @@ public final class MainActivity extends Activity {
         EditText address = field("Recipient XBT address", "");
         AmountEntry entry = new AmountEntry("Amount", "");
         EditText amount = entry.input;
+        text("Label");
         EditText sendLabel = labelField("");
+        setFieldHint(sendLabel, "Optional");
         CheckBox useAll = new CheckBox(this); useAll.setText("Use entire selection"); useAll.setEnabled(false); page.addView(useAll);
         text("Network fee rate (sat/vbyte)");
         EditText fee = field("", "1");
