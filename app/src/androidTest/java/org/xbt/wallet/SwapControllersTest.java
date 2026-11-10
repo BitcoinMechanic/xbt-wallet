@@ -27,7 +27,9 @@ public class SwapControllersTest {
         try { SwapControllers.bounded(new ByteArrayInputStream(new byte[65537]),65536); fail(); }
         catch(IOException expected) {}
     }
-    @Test public void onionUsesUnresolvedSocksAndParsesChunkedJson() throws Exception {
+    @Test public void onionUsesUnresolvedSocksAndParsesChunkedJson() throws Exception { onionTransport(false); }
+    @Test public void receivePostUsesTorWithExactPrivateBody() throws Exception { onionTransport(true); }
+    private void onionTransport(boolean post) throws Exception {
         String host = "a".repeat(56)+".onion";
         try (ServerSocket listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -41,14 +43,20 @@ public class SwapControllersTest {
                     assertEquals(3,in.readUnsignedByte()); byte[] name = new byte[in.readUnsignedByte()];in.readFully(name);assertEquals(80,in.readUnsignedShort());
                     out.write(new byte[]{5,0,0,1,127,0,0,1,0,80});out.flush();
                     BufferedReader reader=new BufferedReader(new InputStreamReader(in,StandardCharsets.US_ASCII));
-                    assertEquals("GET /v1/provider/info HTTP/1.1",reader.readLine());
-                    String line;while((line=reader.readLine())!=null && !line.isEmpty()) {}
+                    assertEquals((post ? "POST /v1/receive" : "GET /v1/provider/info")+" HTTP/1.1",reader.readLine());
+                    String line; int length=0;boolean authorized=false;
+                    while((line=reader.readLine())!=null && !line.isEmpty()) {
+                        if (line.startsWith("Content-Length: ")) length=Integer.parseInt(line.substring(16));
+                        if (line.equals("Authorization: Bearer "+"a".repeat(64))) authorized=true;
+                    }
+                    if (post) { assertTrue(authorized);char[] body=new char[length];int offset=0;while(offset<length)offset+=reader.read(body,offset,length-offset);assertEquals("{\"action\":\"status\"}",new String(body)); }
+                    else assertFalse(authorized);
                     out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\n{}\r\n0\r\n\r\n".getBytes(StandardCharsets.US_ASCII));out.flush();
                     return new String(name,StandardCharsets.US_ASCII);
                 }
             });
             try {
-                byte[] data=SwapControllers.onionRequest(new URI("http://"+host+"/v1/provider/info"),new Proxy(Proxy.Type.SOCKS,new InetSocketAddress(InetAddress.getLoopbackAddress(),listener.getLocalPort())));
+                byte[] data=SwapControllers.onionRequest(new URI("http://"+host+(post?"/v1/receive":"/v1/provider/info")),new Proxy(Proxy.Type.SOCKS,new InetSocketAddress(InetAddress.getLoopbackAddress(),listener.getLocalPort())),post?new JSONObject().put("action","status"):null,post?"a".repeat(64):"");
                 assertEquals("{}",new String(data,StandardCharsets.UTF_8));assertEquals(host,observed.get(10,TimeUnit.SECONDS));
             } finally { executor.shutdownNow(); }
         }

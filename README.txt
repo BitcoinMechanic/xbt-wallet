@@ -45,3 +45,29 @@ the explicitly read-only TorTransportTest when appropriate.
 
 Third-party source licenses remain with their components. This repository
 contains no new blanket license grant for the application.
+
+Lightning swap receiving (2026-11-10):
+  Lightning funds -> Receive has a top-right Swaps toggle, off by default.
+  Off: ordinary XBT invoices, including optional amounts, using the embedded
+  fork's compulsory XBT feature bit. On: enter the fixed XBT sats to receive;
+  the controller supplies a BTC Lightning invoice for the sender to pay.
+  Configure a saved controller's Wallet Receive API origin and private receive
+  key (StartOS -> Swap Setup -> Wallet Receive Access). Tor origins use the
+  app's embedded Tor client. This is a receive-only credential, not a node rune.
+  Original invoice and request state persist before network dispatch. Resume
+  via Swap requests; Retry request reuses that original invoice. Labels remain
+  attached to the wallet's XBT invoice and appear in settled payment history.
+  BTC QR validation checks network features, hash, amount and deadline. An
+  expired payment window hides the QR but does not claim the swap failed until
+  the controller reports a terminal outcome. Received XBT is verified locally.
+  The description is retained on the XBT invoice; it is not copied to the BTC
+  invoice. Swaps require a fixed amount; ordinary XBT receive does not.
+  First API supports authenticated BTC-to-XBT receiving only. Automatic swap
+  sending and public unauthenticated quote access remain future work.
+
+  Validation: Android build/unit tests/lint; five focused Android parser and
+  Tor transport tests; explicit live Tor API authentication/status probe.
+  Controller tests cover durable retries, actual journal/worker integration,
+  status without writes, wrong identity/network/credentials and secret omission.
+  Mainnet wallet configured and updated, but funded phone receive is untested:
+  this wallet needs a channel with inbound liquidity first. No payment sent.

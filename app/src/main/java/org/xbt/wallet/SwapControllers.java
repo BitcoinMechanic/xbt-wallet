@@ -6,7 +6,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-/** Public discovery only. No quotes, credentials, authorization or payments. */
+/** Controller discovery and scoped BTC-to-XBT receive requests. Never submits a wallet payment. */
 final class SwapControllers {
     static final int LIMIT = 65536;
     static final String INFO = "/v1/provider/info", DIRECTORY = "/v1/providers";
@@ -58,19 +58,55 @@ final class SwapControllers {
         }
         return result;
     }
+    static JSONObject receive(String origin, String token, JSONObject request, boolean useTor) throws Exception {
+        if (!token.matches("[a-f0-9]{64}")) throw new Exception("Configure this controller’s Wallet Receive Access key first.");
+        JSONObject response = request(ControllerAddress.origin(origin), "/v1/receive", useTor, request, token);
+        if (response.has("error")) {
+            String code = response.getString("error");
+            String message = switch (code) {
+                case "wallet_receive_not_found" -> "The controller has not recorded this request. Use Retry request to resume with the same invoice.";
+                case "service_previous_swap_active" -> "This controller is still handling another BTC-to-XBT swap. Wait for it to finish.";
+                case "service_pairing_required" -> "The controller has not paired its Lightning nodes.";
+                case "service_history_full" -> "The controller’s swap history is full. Its operator must resolve this.";
+                case "incoming_amount_below_safe_minimum" -> "The BTC amount is below the channel’s safe payment minimum. Use a larger XBT receive amount.";
+                case "bounded_route_unavailable", "recipient_route_unknown" -> "The controller cannot find a route to this wallet. Check its inbound liquidity and invoice route hints.";
+                default -> "Controller refused the receive request.";
+            };
+            String details = code.matches("[a-z_]{1,80}") ? "\nCode: " + code : "";
+            JSONObject diagnostic = response.optJSONObject("diagnostic");
+            if (diagnostic != null) for (String field : new String[]{"node", "operation", "stage", "http_status", "rpc_code", "reference", "amount_msat", "minimum_msat", "maximum_msat"}) {
+                String value = diagnostic.optString(field, "");
+                if (value.matches("[a-zA-Z0-9_.-]{1,80}")) details += "\n" + field + ": " + value;
+            }
+            throw new Exception(message + details);
+        }
+        return response.getJSONObject("result");
+    }
     private static JSONObject get(String origin, String path, boolean useTor) throws Exception {
+        return request(origin, path, useTor, null, "");
+    }
+    private static JSONObject request(String origin, String path, boolean useTor, JSONObject payload, String token) throws Exception {
         URI uri = URI.create(origin + path);
         boolean onion = ControllerAddress.onion(origin);
         if (onion && !useTor) throw new Exception("Tor is required for this controller.");
         byte[] body;
         if ("http".equals(uri.getScheme())) {
-            body = onionRequest(uri, TorTransport.socksProxy());
+            body = onionRequest(uri, TorTransport.socksProxy(), payload, token);
         } else {
             HttpURLConnection connection = (HttpURLConnection) (useTor ? uri.toURL().openConnection(TorTransport.httpProxy()) : uri.toURL().openConnection());
             connection.setConnectTimeout(useTor ? 30000 : 10000); connection.setReadTimeout(useTor ? 30000 : 10000);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Accept", "application/json"); connection.setRequestProperty("User-Agent", "XBTWallet/0.1");
+            if (payload != null) {
+                connection.setRequestMethod("POST"); connection.setDoOutput(true);
+                connection.setRequestProperty("Authorization", "Bearer " + token);
+                connection.setRequestProperty("Content-Type", "application/json");
+                byte[] bytes = payload.toString().getBytes(StandardCharsets.UTF_8);
+                connection.setFixedLengthStreamingMode(bytes.length);
+                try (OutputStream out = connection.getOutputStream()) { out.write(bytes); }
+            }
             try {
+                if (connection.getResponseCode()==401) throw new Exception("Controller access denied. Check Wallet Receive Access and the saved key.");
                 if (connection.getResponseCode() != 200) throw new Exception("Controller unavailable (HTTP " + connection.getResponseCode() + ").");
                 String type = connection.getContentType();
                 if (type == null || !type.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) throw new Exception("Controller did not return JSON.");
@@ -90,19 +126,25 @@ final class SwapControllers {
     }
     // HTTP onion traffic goes only through SOCKS with unresolved DNS. Android's
     // cleartext policy stays disabled; no direct socket or TLS bypass is used.
-    static byte[] onionRequest(URI uri, Proxy proxy) throws Exception {
+    static byte[] onionRequest(URI uri, Proxy proxy) throws Exception { return onionRequest(uri, proxy, null, ""); }
+    static byte[] onionRequest(URI uri, Proxy proxy, JSONObject payload, String token) throws Exception {
         if (!ControllerAddress.onion(ControllerAddress.origin("http://" + uri.getRawAuthority())) || proxy.type() != Proxy.Type.SOCKS)
             throw new Exception("Onion transport requires Tor.");
         try (Socket socket = new Socket(proxy)) {
             socket.connect(InetSocketAddress.createUnresolved(uri.getHost(), uri.getPort() < 0 ? 80 : uri.getPort()), 30000);
             socket.setSoTimeout(30000);
-            String request = "GET " + uri.getRawPath() + " HTTP/1.1\r\nHost: " + uri.getRawAuthority()
-                + "\r\nAccept: application/json\r\nUser-Agent: XBTWallet/0.1\r\nConnection: close\r\n\r\n";
+            byte[] bytes = payload == null ? new byte[0] : payload.toString().getBytes(StandardCharsets.UTF_8);
+            if (payload != null && !token.matches("[a-f0-9]{64}")) throw new Exception("Invalid receive access key.");
+            String request = (payload == null ? "GET " : "POST ") + uri.getRawPath() + " HTTP/1.1\r\nHost: " + uri.getRawAuthority()
+                + "\r\nAccept: application/json\r\nUser-Agent: XBTWallet/0.1\r\nConnection: close\r\n"
+                + (payload == null ? "" : "Authorization: Bearer " + token + "\r\nContent-Type: application/json\r\nContent-Length: " + bytes.length + "\r\n") + "\r\n";
             socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().write(bytes); socket.getOutputStream().flush();
             byte[] all = bounded(socket.getInputStream(), LIMIT + 8192);
             String raw = new String(all, StandardCharsets.ISO_8859_1); int split = raw.indexOf("\r\n\r\n");
             if (split < 0 || split > 8192) throw new Exception("Invalid controller HTTP response.");
             String[] headers = raw.substring(0, split).split("\r\n");
+            if (headers[0].contains(" 401 ")) throw new Exception("Controller access denied. Check Wallet Receive Access and the saved key.");
             if (!headers[0].matches("HTTP/1\\.[01] 200(?: .*)?")) throw new Exception("Controller unavailable through Tor.");
             Map<String, String> fields = new HashMap<>();
             for (int i=1; i<headers.length; i++) {

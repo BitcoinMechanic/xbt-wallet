@@ -22,7 +22,8 @@ public final class MainActivity extends Activity {
         config.densityDpi = Math.round(config.densityDpi * UI_SCALE);
         super.attachBaseContext(base.createConfigurationContext(config));
     }
-    private LinearLayout page;
+    private LinearLayout page, pageHeader;
+    private String viewingSwapHash;
     private View walletMenuAnchor;
     private PopupMenu walletPopup;
     private NodeService node;
@@ -48,6 +49,7 @@ public final class MainActivity extends Activity {
             if (node != null && !busy && (screen.equals("Home") || screen.equals("Wallet is starting"))) home();
             if (node != null && !busy && screen.equals("Receive XBT")) checkDeposit();
             if (node != null && !busy && screen.equals("Lightning invoice")) checkLightningReceipt();
+            if (node != null && !busy && screen.equals("Swap invoice") && viewingSwapHash != null && !prefs.getString("swap-receive-"+viewingSwapHash, "").contains("last_error")) refreshSwapReceive(viewingSwapHash, false);
             handler.postDelayed(this, 5000);
         }
     };
@@ -93,7 +95,7 @@ public final class MainActivity extends Activity {
             return insets;
         });
         scroll.addView(page); setContentView(scroll);
-        LinearLayout header = new LinearLayout(this); header.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout header = new LinearLayout(this); pageHeader = header; header.setGravity(Gravity.CENTER_VERTICAL);
         TextView brand = new TextView(this); brand.setText("XBT"); brand.setTextSize(25);
         brand.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)); brand.setTextColor(0xffa8efd5);
         brand.setLetterSpacing(0.08f);
@@ -673,7 +675,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     page("Review controller"); text(info.name); text(endpoint); text("XBT → BTC · " + info.network);
                     text("Controller identity\n" + info.identity);
-                    text("Connection checked. Saving a controller does not authorize payments. Swap payments are not enabled in this build.");
+                    text("Connection checked. Configure Wallet Receive Access after saving to receive BTC through this controller.");
                     button("Save controller", () -> {
                         try {
                             org.json.JSONArray saved = savedControllers(), updated = new org.json.JSONArray();
@@ -698,7 +700,7 @@ public final class MainActivity extends Activity {
         text(item.optString("label", item.optString("name"))); text(address);
         text("XBT → BTC · " + item.optString("environment")); text("Saved identity\n" + identity);
         text("Checked when saved: " + java.text.DateFormat.getDateTimeInstance().format(new Date(item.optLong("checked_at"))));
-        text("Swap payments are not enabled in this build.");
+        button("Configure swap receiving", () -> controllerReceiveSetup(item));
         button("Check connection", () -> work(() -> {
             prepareControllerTransport(address);
             SwapControllers.inspect(address, prefs.getString("network", "regtest"), identity, controllerTor(address));
@@ -716,6 +718,27 @@ public final class MainActivity extends Activity {
                 } catch (Exception e) { error(e); }
             }).show());
         button("Back", this::swapControllers);
+    }
+    private void controllerReceiveSetup(org.json.JSONObject item) {
+        page("Swap receive access", true);
+        String identity = item.optString("provider");
+        text("Wallet Receive API address");
+        EditText address = field("https://… or http://….onion", prefs.getString("receive-api-" + identity, ""));
+        text("Wallet Receive Access key");
+        EditText token = field("From the controller’s Swap Setup menu", prefs.getString("receive-key-" + identity, ""));
+        token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        button("Scan access key", () -> scan(token));
+        button("Save", () -> {
+            try {
+                String origin = ControllerAddress.origin(address.getText().toString());
+                String key = token.getText().toString().trim();
+                if (!key.matches("[a-f0-9]{64}")) throw new Exception("Enter the 64-character Wallet Receive Access key.");
+                if (!prefs.edit().putString("receive-api-"+identity, origin).putString("receive-key-"+identity,key)
+                    .putString("receive-provider",identity).commit()) throw new Exception("Could not save receive settings.");
+                controllerDetails(item);
+            } catch (Exception e) { error(e); }
+        });
+        button("Back", () -> controllerDetails(item));
     }
     private void controllerSearch() {
         page("Search controllers");
@@ -1330,7 +1353,11 @@ public final class MainActivity extends Activity {
     }
     private void receiveLightning() {
         page("Receive Lightning");
-        text("Amount in sats");
+        Switch swaps = new Switch(this); swaps.setText("Swaps"); swaps.setTextColor(0xffa8efd5);
+        swaps.setContentDescription("Swaps — receive BTC as XBT");
+        LinearLayout.LayoutParams toggleSize = new LinearLayout.LayoutParams(-2, -2); toggleSize.leftMargin = dp(12);
+        pageHeader.addView(swaps, toggleSize);
+        TextView amountTitle = text("Amount in sats");
         EditText amount = field("(optional)", "");
         amount.setContentDescription("Amount in sats (optional)");
         amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
@@ -1342,15 +1369,43 @@ public final class MainActivity extends Activity {
         EditText privateLabel = labelField(""); privateLabel.setHint("(optional - for your own records)");
         privateLabel.setSingleLine(false); privateLabel.setMaxLines(3);
         privateLabel.setContentDescription("Label (optional - for your own records)");
+        Button controller = button("Select swap controller", () -> {
+            try {
+                org.json.JSONArray saved = savedControllers(); java.util.List<org.json.JSONObject> available = new ArrayList<>();
+                for (int i=0;i<saved.length();i++) {
+                    org.json.JSONObject item=saved.getJSONObject(i);
+                    if (prefs.getString("network","regtest").equals(item.optString("environment"))) available.add(item);
+                }
+                if (available.isEmpty()) { controllerAdd("", ""); return; }
+                String[] names = new String[available.size()];
+                for (int i=0;i<names.length;i++) names[i]=available.get(i).optString("label", available.get(i).optString("name"));
+                new AlertDialog.Builder(this).setTitle("Swap controller").setItems(names, (d,which) -> {
+                    org.json.JSONObject item=available.get(which); String id=item.optString("provider");
+                    prefs.edit().putString("receive-provider",id).apply();
+                    if (!prefs.contains("receive-key-"+id)) controllerReceiveSetup(item);
+                    else Toast.makeText(this,"Selected " + names[which],Toast.LENGTH_SHORT).show();
+                }).show();
+            } catch (Exception e) { error(e); }
+        });
+        controller.setVisibility(View.GONE);
+        Button receipts = button("Swap requests", this::swapReceipts); receipts.setVisibility(View.GONE);
+        swaps.setOnCheckedChangeListener((v,enabled) -> {
+            amountTitle.setText(enabled ? "XBT sats to receive" : "Amount in sats");
+            amount.setHint(enabled ? "Required for swaps" : "(optional)");
+            memo.setHint(enabled ? "(optional - for your XBT invoice)" : "(optional - sender can see this)");
+            controller.setVisibility(enabled ? View.VISIBLE : View.GONE); receipts.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        });
         button("Create invoice", () -> {
             final long sats;
             try {
                 String entered = amount.getText().toString().trim();
                 sats = entered.isEmpty() ? 0 : Policy.amount(entered);
+                if (swaps.isChecked() && sats == 0) throw new Exception("Enter the XBT amount to receive through the swap.");
             }
             catch (Exception e) { error(e); return; }
             final String description = memo.getText().toString().trim();
             final String invoiceLabel = privateLabel.getText().toString().trim();
+            if (swaps.isChecked()) { createSwapReceive(sats, description, invoiceLabel); return; }
             work(() -> {
                 LightningOuterClass.AddInvoiceResponse result = LightningOuterClass.AddInvoiceResponse.parseFrom(node.rpc("addInvoice",
                     LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(3600).setPrivate(true).build()));
@@ -1374,6 +1429,107 @@ public final class MainActivity extends Activity {
             });
         });
         button("Home", this::home);
+    }
+    private void createSwapReceive(long sats, String description, String label) {
+        work(() -> {
+            String provider = prefs.getString("receive-provider", ""), api=prefs.getString("receive-api-"+provider,""), key=prefs.getString("receive-key-"+provider,"");
+            if (api.isEmpty() || key.isEmpty()) throw new Exception("Select a controller and configure its Wallet Receive Access first.");
+            for (String name : prefs.getAll().keySet()) if (name.startsWith("swap-receive-")) {
+                org.json.JSONObject saved=new org.json.JSONObject(prefs.getString(name,"{}"));
+                org.json.JSONObject reply=saved.optJSONObject("reply");
+                if (!saved.optBoolean("dismissed") && !saved.optBoolean("received") && (reply==null || !reply.optBoolean("terminal")))
+                    throw new Exception("A swap request is still pending. Open Swap requests to resume it before creating another.");
+            }
+            LightningOuterClass.AddInvoiceResponse result=LightningOuterClass.AddInvoiceResponse.parseFrom(node.rpc("addInvoice",
+                LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(3600).setPrivate(true).build()));
+            String hash=SwapReceive.hash(result.getRHash().toByteArray());
+            org.json.JSONObject record=new org.json.JSONObject().put("hash",hash).put("invoice",result.getPaymentRequest()).put("sats",sats)
+                .put("provider",provider).put("api",api).put("environment",prefs.getString("network","regtest")).put("created",System.currentTimeMillis());
+            if (!prefs.edit().putString("swap-receive-"+hash,record.toString())
+                .putString("invoice-label-"+android.util.Base64.encodeToString(result.getRHash().toByteArray(),android.util.Base64.NO_WRAP),label).commit())
+                throw new Exception("Could not save the receive request. No request was sent to the controller.");
+            runOnUiThread(() -> showSwapReceive(record));
+            requestSwapReceive(record,true);
+        });
+    }
+    private void swapReceipts() {
+        page("Swap requests");
+        java.util.List<org.json.JSONObject> records=new ArrayList<>();
+        try {
+            for (String name:prefs.getAll().keySet()) if (name.startsWith("swap-receive-")) records.add(new org.json.JSONObject(prefs.getString(name,"{}")));
+            records.sort((a,b)->Long.compare(b.optLong("created"),a.optLong("created")));
+            for (org.json.JSONObject r:records) button(r.optLong("sats")+" XBT sats · "+swapReceiveState(r),()->showSwapReceive(r));
+            if (records.isEmpty()) text("No swap requests yet.");
+        } catch(Exception e) { error(e); }
+        button("Back",this::receiveLightning);
+    }
+    private String swapReceiveState(org.json.JSONObject record) {
+        if (record.optBoolean("dismissed")) return "Not created";
+        if (record.optBoolean("received")) return "Received";
+        org.json.JSONObject reply=record.optJSONObject("reply");
+        return reply==null ? "Request pending" : reply.optString("state","pending").replace('_',' ');
+    }
+    private void refreshSwapReceive(String hash, boolean create) {
+        work(() -> requestSwapReceive(new org.json.JSONObject(prefs.getString("swap-receive-"+hash,"{}")), create));
+    }
+    private void requestSwapReceive(org.json.JSONObject record, boolean create) throws Exception {
+        record.remove("last_error");
+        try { requestSwapReceiveChecked(record, create); }
+        catch (Exception e) {
+            record.put("last_error", e.getMessage()==null ? e.getClass().getSimpleName() : e.getMessage());
+            if (!create && e.getMessage()!=null && e.getMessage().contains("Code: wallet_receive_not_found")) record.put("not_found",true);
+            if (!prefs.edit().putString("swap-receive-"+record.getString("hash"),record.toString()).commit()) throw new Exception("Could not save receive error; check the existing request before retrying.");
+            runOnUiThread(() -> { if (screen.equals("Swap invoice") && record.optString("hash").equals(viewingSwapHash)) showSwapReceive(record); });
+        }
+    }
+    private void requestSwapReceiveChecked(org.json.JSONObject record, boolean create) throws Exception {
+        if (create) record.remove("not_found");
+        String hash=record.getString("hash");
+        LightningOuterClass.Invoice own=LightningOuterClass.Invoice.parseFrom(node.rpc("lookupInvoice",LightningOuterClass.PaymentHash.newBuilder().setRHashStr(hash).build()));
+        if (own.getState()==LightningOuterClass.Invoice.InvoiceState.SETTLED) {
+            record.put("received",true);
+        } else {
+            String api=record.getString("api"); prepareControllerTransport(api);
+            org.json.JSONObject request=new org.json.JSONObject().put("action",create ? "create":"status").put("invoice",record.getString("invoice"))
+                .put("environment",record.getString("environment")).put("provider",record.getString("provider"));
+            org.json.JSONObject reply=SwapControllers.receive(api,prefs.getString("receive-key-"+record.getString("provider"),""),request,controllerTor(api));
+            LightningOuterClass.PayReq decoded=reply.has("invoice") ? LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq",LightningOuterClass.PayReqString.newBuilder().setPayReq(reply.getString("invoice")).build())) : null;
+            SwapReceive.validate(record,reply,decoded); record.put("reply",reply);
+        }
+        if (!prefs.edit().putString("swap-receive-"+hash,record.toString()).commit()) throw new Exception("Could not save swap status.");
+        runOnUiThread(() -> { if (screen.equals("Swap invoice") && hash.equals(viewingSwapHash)) showSwapReceive(record); });
+    }
+    private void showSwapReceive(org.json.JSONObject record) {
+        page("Swap invoice"); viewingSwapHash=record.optString("hash");
+        text("Receive "+record.optLong("sats")+" XBT sats"); text(swapReceiveState(record));
+        if (record.has("last_error")) text(record.optString("last_error"));
+        if (record.optBoolean("not_found") && !record.optBoolean("dismissed")) button("Dismiss uncreated request", () -> {
+            try { record.put("dismissed",true); prefs.edit().putString("swap-receive-"+record.getString("hash"),record.toString()).commit(); swapReceipts(); }
+            catch(Exception e) { error(e); }
+        });
+        org.json.JSONObject reply=record.optJSONObject("reply");
+        if (!record.optBoolean("received") && reply!=null && !reply.optBoolean("terminal")) {
+            long deadline=reply.optLong("expires_at");
+            text("Sender pays "+(reply.optLong("btc_msat")/1000.0)+" BTC sats");
+            text("Pay before "+java.text.DateFormat.getTimeInstance().format(new Date(deadline*1000)));
+            if (deadline>System.currentTimeMillis()/1000 && reply.has("invoice") && !reply.optBoolean("blocked")) {
+                try {
+                    String invoice=reply.getString("invoice");
+                    BitMatrix matrix=new MultiFormatWriter().encode(invoice,BarcodeFormat.QR_CODE,640,640);
+                    Bitmap bitmap=Bitmap.createBitmap(640,640,Bitmap.Config.ARGB_8888);
+                    for(int y=0;y<640;y++) for(int x=0;x<640;x++) bitmap.setPixel(x,y,matrix.get(x,y)?0xff000000:0xffffffff);
+                    ImageView qr=new ImageView(this);qr.setImageBitmap(bitmap);qr.setContentDescription("BTC Lightning invoice QR code");
+                    page.addView(qr,new LinearLayout.LayoutParams(-1,dp(280)));
+                    button("Copy BTC invoice",()->getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("BTC Lightning invoice",invoice)));
+                    text(invoice);
+                } catch(Exception e) { error(e); }
+            } else if (deadline<=System.currentTimeMillis()/1000) text("Payment window ended. Checking the final swap outcome.");
+        }
+        if (!record.optBoolean("dismissed") && !record.optBoolean("received") && (reply==null || !reply.optBoolean("terminal"))) {
+            button("Check status",()->refreshSwapReceive(record.optString("hash"),false));
+            button("Retry request",()->refreshSwapReceive(record.optString("hash"),true));
+        }
+        button("Swap requests",this::swapReceipts); button("Home",this::home);
     }
     private void checkLightningReceipt() {
         final ByteString hash = receivingInvoiceHash;
