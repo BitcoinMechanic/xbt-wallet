@@ -120,14 +120,15 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         prefs = getSharedPreferences("wallet", 0);
         if (BuildConfig.MAINNET_TEST && !prefs.contains("network")) {
-            prefs.edit().putString("network", "mainnet").putString("mode", "easy").commit();
+            prefs.edit().putString("network", "mainnet").commit();
         }
         if (BuildConfig.MAINNET_TEST && !prefs.getBoolean("dnsDiscoveryConfigured", false)) {
             prefs.edit().remove("syncPeer").putBoolean("useTor", false)
                 .putString("feeUrl", "https://mempool.guide/api/v1/fees/precise")
                 .putBoolean("dnsDiscoveryConfigured", true).commit();
         }
-        if (prefs.getString("mode", "").equals("easy")) start(); else modes();
+        if (BuildConfig.MAINNET_TEST && !prefs.getBoolean("modeChoiceMade", false)) modes();
+        else if (prefs.getString("mode", "").equals("easy")) start(); else modes();
     }
     private void page(String title) {
         page(title, false);
@@ -298,11 +299,18 @@ public final class MainActivity extends Activity {
     }
     private void modes() {
         page("Your Lightning wallet");
-        text("Easy Mode starts an XBT Lightning node on this phone. This alpha uses a test network by default.");
+        text("Easy Mode runs your XBT Lightning wallet on this phone. Hard Mode will let you connect to your own Lightning node.");
         button("Easy Mode", this::setup);
         Button hard = button("Hard Mode · coming later", () -> {}); hard.setEnabled(false);
     }
     private void setup() {
+        if (BuildConfig.MAINNET_TEST) {
+            if (!prefs.edit().putString("mode", "easy").putBoolean("modeChoiceMade", true).commit()) {
+                error(new Exception("Could not save your mode selection.")); return;
+            }
+            start();
+            return;
+        }
         page("Connect your XBT node");
         text("Enter an XBT full-node peer serving compact block filters. A Lightning peer is a separate connection. Regtest coins have no value.");
         EditText peer = field("Full-node host:port", prefs.getString("syncPeer", "10.0.2.2:19444"));
@@ -1478,6 +1486,16 @@ public final class MainActivity extends Activity {
                 boolean provisional = selected.isEmpty();
                 boolean amountMissing = !useAll.isChecked() && amount.getText().toString().trim().isEmpty();
                 List<LightningOuterClass.Utxo> estimateInputs = provisional ? available.getUtxosList() : selected;
+                if (estimateInputs.isEmpty()) {
+                    long estimatedFee = OnChainPayment.unfundedFee(request.address, Policy.amount(fee.getText().toString()));
+                    Long recipient = amountMissing ? null : entry.sats();
+                    summary.setText("Recipient receives: " + (recipient == null ? "—" : displayAmount(recipient))
+                        + "\nEstimated network fee: " + displayAmount(estimatedFee)
+                        + "\nTotal including fee: " + (recipient == null ? "—" : displayAmount(Math.addExact(recipient, estimatedFee)))
+                        + "\nIllustrative estimate for one native SegWit input and a change output. No confirmed funds are available to spend."
+                        + (request.address.isEmpty() ? "\nFee estimated until a recipient address is entered." : ""));
+                    return;
+                }
                 OnChainPayment plan = onChainPreview(estimateInputs, available, wallet, request.address,
                     useAll.isChecked() ? 0 : amountMissing ? 546 : entry.sats(), Policy.amount(fee.getText().toString()), useAll.isChecked());
                 if (useAll.isChecked()) entry.setSats(plan.amount);

@@ -66,6 +66,14 @@ public class OnChainPaymentTest {
     @Test(expected=IllegalArgumentException.class) public void noSilentAdditionalInputs() {
         new OnChainPayment(100000,200000,0,273,1,124,100000,1,false);
     }
+    @Test public void unfundedEstimateRefinesWithAddressAndFeeRate() {
+        assertEquals(329, OnChainPayment.unfundedFee("", 2));
+        assertEquals(305, OnChainPayment.unfundedFee(ADDRESS, 2));
+        assertEquals(611, OnChainPayment.unfundedFee(ADDRESS, 4));
+    }
+    @Test(expected=IllegalArgumentException.class) public void unfundedWalletStillCannotCreatePayment() {
+        new OnChainPayment(0, 0, 0, 0, 0, 124, 50000, 2, false);
+    }
     @Test public void recipientOutputSizes() {
         assertEquals(124, OnChainPayment.outputWeight(ADDRESS));
     }

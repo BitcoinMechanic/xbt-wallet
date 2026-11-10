@@ -84,6 +84,11 @@ final class OnChainPayment {
         total = Math.addExact(amount, fee);
         if (available - total < requiredReserve) throw new IllegalArgumentException("Keep enough on-chain funds for channel reserves.");
     }
+    // Display-only estimate; never substitutes for selected-input validation before sending.
+    static long unfundedFee(String address, long rate) {
+        if (rate <= 0) throw new IllegalArgumentException("Enter a positive fee rate.");
+        return fee(42 + 273 + previewOutputWeight(address) + 172, rate);
+    }
     private static long fee(long weight, long rate) {
         return Math.multiplyExact(weight, Math.max(253, Math.multiplyExact(rate, 250))) / 1000;
     }
