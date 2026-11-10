@@ -401,6 +401,76 @@ public final class MainActivity extends Activity {
             });
         }, "fiat-rates").start();
     }
+    private java.math.BigDecimal amountPrice() {
+        try {
+            org.json.JSONObject rates = fiatRates == null ? new org.json.JSONObject(prefs.getString("fiat-rates", "{}")) : fiatRates;
+            long age = System.currentTimeMillis() - rates.getLong("timestamp");
+            java.math.BigDecimal price = new java.math.BigDecimal(rates.getString(prefs.getString("fiat-currency", "USD")));
+            if (age >= -300000 && age < 900000 && price.signum() > 0) return price;
+        } catch (Exception ignored) {}
+        return null;
+    }
+    private String amountReview(long msats, java.math.BigDecimal price) {
+        java.math.BigDecimal sats = java.math.BigDecimal.valueOf(msats, 3);
+        String value = sats.stripTrailingZeros().toPlainString() + " sats\n" + sats.movePointLeft(8).stripTrailingZeros().toPlainString() + " XBT";
+        String currency = prefs.getString("fiat-currency", "USD");
+        if (!currency.equals("Off")) value += "\n" + (price == null ? currency + " rate unavailable" : "≈ " + sats.movePointLeft(8).multiply(price).setScale(Math.max(0, java.util.Currency.getInstance(currency).getDefaultFractionDigits()), java.math.RoundingMode.HALF_UP).toPlainString() + " " + currency);
+        return value;
+    }
+    private final class AmountEntry {
+        final TextView title;
+        final LinearLayout row;
+        final EditText input;
+        final Button currency;
+        int unit;
+        Long exactSats;
+        String exactText;
+        Runnable changed = () -> {};
+        boolean changing;
+        AmountEntry(String heading, String hint) {
+            title = text(heading);
+            input = field(hint, ""); page.removeView(input);
+            input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+            input.setContentDescription(heading + " in sats");
+            row = new LinearLayout(MainActivity.this); row.setGravity(Gravity.CENTER_VERTICAL);
+            row.addView(input, new LinearLayout.LayoutParams(0, -2, 1));
+            currency = new Button(MainActivity.this); styleButton(currency, false); currency.setText("sats");
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(82), -2); size.leftMargin = dp(8);
+            row.addView(currency, size); page.addView(row);
+            currency.setContentDescription("Amount currency. Tap to cycle sats, XBT and fiat.");
+            currency.setOnClickListener(v -> {
+                try {
+                    int next = (unit + 1) % (prefs.getString("fiat-currency", "USD").equals("Off") ? 2 : 3);
+                    java.math.BigDecimal price = amountPrice();
+                    Long value = input.getText().toString().trim().isEmpty() ? null : sats();
+                    if (next == 2 && price == null) { fetchFiatRates(); throw new Exception("Fetching an exchange rate. Try again shortly or use sats/XBT."); }
+                    changing = true; unit = next;
+                    currency.setText(unit == 0 ? "sats" : unit == 1 ? "XBT" : prefs.getString("fiat-currency", "USD"));
+                    input.setContentDescription(heading + " in " + currency.getText());
+                    if (value != null) setSats(value);
+                } catch (Exception e) { error(e); }
+                finally { changing = false; changed.run(); }
+            });
+            input.addTextChangedListener(new android.text.TextWatcher() {
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                public void onTextChanged(CharSequence s, int start, int before, int count) { if (!changing) { exactSats = null; changed.run(); } }
+                public void afterTextChanged(android.text.Editable s) {}
+            });
+            if (!prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
+        }
+        long sats() {
+            if (exactSats != null && input.getText().toString().equals(exactText)) return exactSats;
+            return AmountUnits.sats(input.getText().toString(), unit, amountPrice());
+        }
+        void setSats(long value) {
+            boolean wasChanging = changing; changing = true;
+            try {
+                exactText = AmountUnits.input(value, unit, amountPrice()); exactSats = value; input.setText(exactText);
+            } finally { changing = wasChanging; }
+        }
+        void visible(boolean show) { title.setVisibility(show ? View.VISIBLE : View.GONE); row.setVisibility(show ? View.VISIBLE : View.GONE); }
+        void enabled(boolean enabled) { input.setEnabled(enabled); currency.setEnabled(enabled); }
+    }
     private void fiatCurrency() {
         String selected = prefs.getString("fiat-currency", "USD");
         String[] labels = new String[FiatRates.CURRENCIES.length + 1]; int checked = 0;
@@ -1005,9 +1075,8 @@ public final class MainActivity extends Activity {
             for (LightningOuterClass.Transaction tx : previous.getTransactionsList()) baseline.add(tx.getTxHash());
             runOnUiThread(() -> {
                 receivingAddress = address; receiveBaseline = baseline; page("Receive XBT");
-                text("Amount in sats (optional)");
-                EditText amount = field("Leave blank for any amount", "");
-                amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                AmountEntry entry = new AmountEntry("Amount (optional)", "Leave blank for any amount");
+                EditText amount = entry.input;
                 ImageView qr = new ImageView(this); qr.setContentDescription("Deposit payment request QR code");
                 page.addView(qr, new LinearLayout.LayoutParams(-1, Math.round((getResources().getDisplayMetrics().widthPixels - 56) * UI_SCALE)));
                 TextView validation = text(""); validation.setVisibility(View.GONE);
@@ -1033,7 +1102,7 @@ public final class MainActivity extends Activity {
                 Runnable updateRequest = () -> {
                     if (!screen.equals("Receive XBT") || receiveBaseline != baseline) return;
                     try {
-                        String value = OnChainPayment.receiveRequest(address, amount.getText().toString());
+                        String value = OnChainPayment.receiveRequest(address, amount.getText().toString().trim().isEmpty() ? "" : Long.toString(entry.sats()));
                         BitMatrix matrix = new MultiFormatWriter().encode(value, BarcodeFormat.QR_CODE, 640, 640);
                         Bitmap bitmap = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888);
                         for (int y = 0; y < 640; y++) for (int x = 0; x < 640; x++) bitmap.setPixel(x, y, matrix.get(x,y) ? 0xff000000 : 0xffffffff);
@@ -1044,6 +1113,7 @@ public final class MainActivity extends Activity {
                         validation.setText(e.getMessage()); validation.setVisibility(View.VISIBLE);
                     }
                 };
+                entry.changed = updateRequest;
                 amount.addTextChangedListener(new android.text.TextWatcher() {
                     public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
                     public void onTextChanged(CharSequence s, int start, int before, int count) {
@@ -1239,8 +1309,8 @@ public final class MainActivity extends Activity {
         if (boxes.isEmpty()) text("No confirmed UTXOs available.");
         TextView selectedTotal = text("Selected: 0 sats");
         EditText address = field("Recipient XBT address", "");
-        EditText amount = field("Amount in sats", "");
-        amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        AmountEntry entry = new AmountEntry("Amount", "");
+        EditText amount = entry.input;
         EditText sendLabel = labelField("");
         CheckBox useAll = new CheckBox(this); useAll.setText("Use entire selection"); useAll.setEnabled(false); page.addView(useAll);
         text("Network fee rate (sat/vbyte)");
@@ -1258,8 +1328,8 @@ public final class MainActivity extends Activity {
                 selectedTotal.setText("Selected: " + total + " sats");
                 OnChainPayment.Request request = OnChainPayment.parse(address.getText().toString());
                 OnChainPayment plan = onChainPreview(selected, available, wallet, request.address,
-                    useAll.isChecked() ? 0 : Policy.amount(amount.getText().toString()), Policy.amount(fee.getText().toString()), useAll.isChecked());
-                if (useAll.isChecked()) amount.setText(Long.toString(plan.amount));
+                    useAll.isChecked() ? 0 : entry.sats(), Policy.amount(fee.getText().toString()), useAll.isChecked());
+                if (useAll.isChecked()) entry.setSats(plan.amount);
                 summary.setText(paymentSummary(plan) + (request.address.isEmpty()
                     ? "\nFee estimated until a recipient address is entered." : ""));
             } catch (Exception e) {
@@ -1270,11 +1340,11 @@ public final class MainActivity extends Activity {
         useAll.setOnCheckedChangeListener((v, checked) -> {
             if (checked) manualAmount[0] = amount.getText().toString();
             else amount.setText(manualAmount[0]);
-            amount.setEnabled(!checked); update.run();
+            entry.enabled(!checked); update.run();
         });
-        for (Map.Entry<CheckBox, LightningOuterClass.Utxo> entry : boxes.entrySet())
-            entry.getKey().setOnCheckedChangeListener((v, checked) -> {
-                if (checked) selected.add(entry.getValue()); else selected.remove(entry.getValue());
+        for (Map.Entry<CheckBox, LightningOuterClass.Utxo> coinEntry : boxes.entrySet())
+            coinEntry.getKey().setOnCheckedChangeListener((v, checked) -> {
+                if (checked) selected.add(coinEntry.getValue()); else selected.remove(coinEntry.getValue());
                 useAll.setChecked(false);
                 useAll.setEnabled(!selected.isEmpty());
                 update.run();
@@ -1284,7 +1354,7 @@ public final class MainActivity extends Activity {
             public void onTextChanged(CharSequence s, int start, int before, int count) { update.run(); }
             public void afterTextChanged(android.text.Editable s) {}
         };
-        amount.addTextChangedListener(watcher); fee.addTextChangedListener(watcher);
+        entry.changed = update; fee.addTextChangedListener(watcher);
         address.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             public void onTextChanged(CharSequence s, int start, int before, int count) {}
@@ -1295,8 +1365,8 @@ public final class MainActivity extends Activity {
                         OnChainPayment.Request request = OnChainPayment.parse(s.toString());
                         updating[0] = true;
                         if (request.amount != null) {
-                            useAll.setChecked(false); amount.setEnabled(true);
-                            amount.setText(Long.toString(request.amount));
+                            useAll.setChecked(false); entry.enabled(true);
+                            entry.setSats(request.amount);
                         }
                         address.setText(request.address);
                     } catch (Exception e) { summary.setText(e.getMessage()); return; }
@@ -1313,8 +1383,9 @@ public final class MainActivity extends Activity {
                 if (recipient.isEmpty()) throw new Exception("Enter a recipient address.");
                 final String paymentLabel = sendLabel.getText().toString().trim();
                 final boolean max = useAll.isChecked();
-                final long sats = max ? 0 : Policy.amount(amount.getText().toString());
+                final long sats = max ? 0 : entry.sats();
                 final long rate = Policy.amount(fee.getText().toString());
+                final java.math.BigDecimal reviewPrice = amountPrice();
                 List<LightningOuterClass.Utxo> chosen = new ArrayList<>(selected);
                 onChainPreview(chosen, available, wallet, recipient, sats, rate, max);
                 work(() -> {
@@ -1326,7 +1397,7 @@ public final class MainActivity extends Activity {
                     for (LightningOuterClass.Utxo coin : chosen) validation.addInputs(coin.getOutpoint());
                     node.rpc("estimateFee", validation.build());
                     runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Send on chain?")
-                        .setMessage("Recipient: " + recipient + "\n" + paymentSummary(plan) + "\nFee rate: " + rate + " sat/vbyte"
+                        .setMessage("Recipient: " + recipient + "\n" + amountReview(Math.multiplyExact(plan.amount, 1000), reviewPrice) + "\n" + paymentSummary(plan) + "\nFee rate: " + rate + " sat/vbyte"
                             + (max ? "" : "\nRecipient amount is fixed; the network fee is paid in addition."))
                         .setNegativeButton("Cancel", null).setPositiveButton("Send", (d, w) -> work(() -> {
                             OnChainPayment fresh = freshOnChainPreview(chosen, recipient, sats, rate, max);
@@ -1367,10 +1438,9 @@ public final class MainActivity extends Activity {
         swaps.setContentDescription("Swaps — receive BTC as XBT");
         LinearLayout.LayoutParams toggleSize = new LinearLayout.LayoutParams(-2, -2); toggleSize.leftMargin = dp(12);
         pageHeader.addView(swapToggle, toggleSize);
-        TextView amountTitle = text("Amount in sats");
-        EditText amount = field("Optional", "");
-        amount.setContentDescription("Amount in sats Optional");
-        amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        AmountEntry entry = new AmountEntry("Amount", "Optional");
+        TextView amountTitle = entry.title;
+        EditText amount = entry.input;
         text("Description");
         EditText memo = field("Optional - sender can see this", "");
         memo.setSingleLine(false); memo.setMaxLines(3);
@@ -1400,7 +1470,7 @@ public final class MainActivity extends Activity {
         controller.setVisibility(View.GONE);
         Button receipts = button("Swap requests", this::swapReceipts); receipts.setVisibility(View.GONE);
         swaps.setOnCheckedChangeListener((v,enabled) -> {
-            amountTitle.setText(enabled ? "XBT sats to receive" : "Amount in sats");
+            amountTitle.setText(enabled ? "XBT amount to receive" : "Amount");
             amount.setHint(enabled ? "Required for swaps" : "Optional");
             memo.setHint(enabled ? "Optional - for your XBT invoice" : "Optional - sender can see this");
             controller.setVisibility(enabled ? View.VISIBLE : View.GONE); receipts.setVisibility(enabled ? View.VISIBLE : View.GONE);
@@ -1409,7 +1479,7 @@ public final class MainActivity extends Activity {
             final long sats;
             try {
                 String entered = amount.getText().toString().trim();
-                sats = entered.isEmpty() ? 0 : Policy.amount(entered);
+                sats = entered.isEmpty() ? 0 : entry.sats();
                 if (swaps.isChecked() && sats == 0) throw new Exception("Enter the XBT amount to receive through the swap.");
             }
             catch (Exception e) { error(e); return; }
@@ -1558,21 +1628,53 @@ public final class MainActivity extends Activity {
     private void payment() {
         page("Pay Lightning"); text("XBT invoices only. Review the recipient and amount before paying.");
         EditText invoice = field("Lightning invoice", "");
+        AmountEntry entry = new AmountEntry("Amount", "Enter an amount"); entry.visible(false);
+        Runnable detectAmount = () -> {
+            final String raw = invoice.getText().toString().trim().replaceFirst("(?i)^lightning:", "");
+            if (node == null || raw.isEmpty()) return;
+            node.io.execute(() -> {
+                boolean amountless = false;
+                try {
+                    LightningOuterClass.PayReq decoded = LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq", LightningOuterClass.PayReqString.newBuilder().setPayReq(raw).build()));
+                    amountless = decoded.getNumMsat() == 0 && (decoded.containsFeatures(512) || decoded.containsFeatures(513));
+                } catch (Exception ignored) { /* Review reports invalid invoices. */ }
+                final boolean show = amountless;
+                runOnUiThread(() -> { if (invoice.isAttachedToWindow() && raw.equals(invoice.getText().toString().trim().replaceFirst("(?i)^lightning:", ""))) entry.visible(show); });
+            });
+        };
+        invoice.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) { entry.visible(false); handler.removeCallbacks(detectAmount); handler.postDelayed(detectAmount, 300); }
+            public void afterTextChanged(android.text.Editable s) {}
+        });
         EditText sendLabel = labelField("");
         button("Scan invoice QR", () -> scan(invoice));
         button("Review invoice", () -> {
             String raw = invoice.getText().toString().trim().replaceFirst("(?i)^lightning:", "");
             final String paymentLabel = sendLabel.getText().toString().trim();
+            final String entered = entry.input.getText().toString();
+            final int enteredUnit = entry.unit;
+            final Long exact = entry.exactSats != null && entered.equals(entry.exactText) ? entry.exactSats : null;
+            final java.math.BigDecimal reviewPrice = amountPrice();
             work(() -> {
                 LightningOuterClass.PayReq pay = LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq", LightningOuterClass.PayReqString.newBuilder().setPayReq(raw).build()));
-                if (!Policy.invoiceAllowed(pay.containsFeatures(512) || pay.containsFeatures(513), pay.getNumMsat(), pay.getTimestamp(), pay.getExpiry(), System.currentTimeMillis()/1000)) throw new Exception("Use an unexpired, fixed-amount XBT invoice.");
+                if (!(pay.containsFeatures(512) || pay.containsFeatures(513))) throw new Exception("This is not an XBT invoice.");
+                final boolean amountless = pay.getNumMsat() == 0;
+                if (amountless && entered.trim().isEmpty()) {
+                    runOnUiThread(() -> entry.visible(true));
+                    throw new Exception("Enter an amount for this amountless invoice.");
+                }
+                final long msats = amountless ? Math.multiplyExact(exact != null ? exact : AmountUnits.sats(entered, enteredUnit, reviewPrice), 1000) : pay.getNumMsat();
+                if (!Policy.invoiceAllowed(true, msats, pay.getTimestamp(), pay.getExpiry(), System.currentTimeMillis()/1000)) throw new Exception("This invoice has expired or has an invalid amount.");
                 if (prefs.contains("payment-" + pay.getPaymentHash())) throw new Exception("This invoice already has a recorded attempt. Reconcile its status before retrying.");
-                long feeLimit = Math.max(1, pay.getNumSatoshis()/100);
-                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Pay XBT invoice?").setMessage(pay.getNumMsat() + " XBT millisats\nMaximum routing fee: " + feeLimit + " sats\nRecipient: " + pay.getDestination())
+                long feeLimit = Math.max(1, msats/1000/100);
+                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Pay XBT invoice?").setMessage(amountReview(msats, reviewPrice) + "\nMaximum routing fee: " + feeLimit + " sats\nRecipient: " + pay.getDestination())
                     .setNegativeButton("Cancel",null).setPositiveButton("Pay",(d,w)->work(()->{
                         if (!prefs.edit().putString("payment-" + pay.getPaymentHash(), "submitted").putString("payment-label-" + pay.getPaymentHash(), paymentLabel).commit()) throw new Exception("Could not record payment");
-                        lndmobile.Lndmobile.routerSendPaymentV2(routerrpc.RouterOuterClass.SendPaymentRequest.newBuilder()
-                            .setPaymentRequest(raw).setFeeLimitSat(feeLimit).setTimeoutSeconds(30).setMaxParts(1).build().toByteArray(), new lndmobile.RecvStream() {
+                        routerrpc.RouterOuterClass.SendPaymentRequest.Builder request = routerrpc.RouterOuterClass.SendPaymentRequest.newBuilder()
+                            .setPaymentRequest(raw).setFeeLimitSat(feeLimit).setTimeoutSeconds(30).setMaxParts(1);
+                        if (amountless) request.setAmtMsat(msats);
+                        lndmobile.Lndmobile.routerSendPaymentV2(request.build().toByteArray(), new lndmobile.RecvStream() {
                             private volatile boolean terminal;
                             public void onResponse(byte[] data) {
                                 try {
