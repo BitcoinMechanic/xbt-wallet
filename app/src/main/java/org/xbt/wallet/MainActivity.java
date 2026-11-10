@@ -488,6 +488,11 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.PendingChannelsResponse.WaitingCloseChannel c : pending.getWaitingCloseChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 if (hasPublic) text("Required on-chain reserve: " + displayAmount(balance.getReservedBalanceAnchorChan()));
                 homeScanButton();
+                page.setOnClickListener(v -> {
+                    for (int i = 0; i < homeActionsExpanded.length; i++) {
+                        if (homeActionsExpanded[i]) animateHomeActions(i, false);
+                    }
+                });
             });
         });
     }
