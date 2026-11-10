@@ -245,10 +245,11 @@ public final class MainActivity extends Activity {
         if (currency.equals("Off")) value = "Fiat display is off";
         else if (price == null) value = "1 XBT\n" + currency + " rate unavailable";
         else {
-            java.text.NumberFormat format = java.text.NumberFormat.getNumberInstance(Locale.US);
+            java.text.NumberFormat format = java.text.NumberFormat.getCurrencyInstance(Locale.US);
+            format.setCurrency(java.util.Currency.getInstance(currency));
             int decimals = Math.max(0, java.util.Currency.getInstance(currency).getDefaultFractionDigits());
             format.setMinimumFractionDigits(decimals); format.setMaximumFractionDigits(decimals);
-            value = "1 XBT\n≈ " + format.format(price) + " " + currency;
+            value = format.format(price) + "\n/XBT";
         }
         headerRate.setText(value);
         headerRate.setContentDescription(value + ". Tap to show the XBT logo.");
