@@ -459,6 +459,10 @@ public final class MainActivity extends Activity {
             LightningOuterClass.WalletBalanceResponse balance = LightningOuterClass.WalletBalanceResponse.parseFrom(node.rpc("walletBalance", LightningOuterClass.WalletBalanceRequest.getDefaultInstance()));
             LightningOuterClass.PendingChannelsResponse pending = LightningOuterClass.PendingChannelsResponse.parseFrom(node.rpc("pendingChannels", LightningOuterClass.PendingChannelsRequest.getDefaultInstance()));
             LightningOuterClass.ListChannelsResponse active = LightningOuterClass.ListChannelsResponse.parseFrom(node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
+            LightningOuterClass.ListPeersResponse peers = LightningOuterClass.ListPeersResponse.parseFrom(
+                node.rpc("listPeers", LightningOuterClass.ListPeersRequest.getDefaultInstance()));
+            Set<String> connectedPeers = new HashSet<>();
+            for (LightningOuterClass.Peer peer : peers.getPeersList()) connectedPeers.add(peer.getPubKey());
             // One-way wallet history marker: closures must never reset onboarding.
             if (!prefs.getBoolean("hasEverHadChannel", false)) {
                 boolean observedChannel = active.getChannelsCount() > 0 || pending.getPendingOpenChannelsCount() > 0
@@ -487,6 +491,7 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.PendingChannelsResponse.ForceClosedChannel c : pending.getPendingForceClosingChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 for (LightningOuterClass.PendingChannelsResponse.WaitingCloseChannel c : pending.getWaitingCloseChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 if (hasPublic) text("Required on-chain reserve: " + displayAmount(balance.getReservedBalanceAnchorChan()));
+                homeChannelStatus(active, pending, connectedPeers);
                 homeScanButton();
                 page.setOnClickListener(v -> {
                     for (int i = 0; i < homeActionsExpanded.length; i++) {
@@ -503,6 +508,54 @@ public final class MainActivity extends Activity {
         bar.setProgressTintList(android.content.res.ColorStateList.valueOf(0xffa8efd5));
         page.addView(bar, new LinearLayout.LayoutParams(-1, dp(8)));
         text(String.format(Locale.getDefault(), "%,d / %,d", height, target));
+    }
+    private void homeChannelStatus(LightningOuterClass.ListChannelsResponse active,
+            LightningOuterClass.PendingChannelsResponse pending, Set<String> connectedPeers) {
+        if (active.getChannelsCount() == 0 && pending.getPendingOpenChannelsCount() == 0) return;
+        TextView heading = text("Channels"); heading.setPadding(0, dp(16), 0, dp(4));
+        int number = 1;
+        for (LightningOuterClass.Channel channel : active.getChannelsList()) {
+            boolean connected = channel.getActive();
+            boolean connecting = !connected && connectedPeers.contains(channel.getRemotePubkey());
+            homeChannelRow(channel.getChannelPoint(), number++, connected ? "Connected" : connecting ? "Connecting" : "Offline",
+                connected ? 0xff65d89a : connecting ? 0xffffb454 : 0xffed6b73, () -> channelDetails(channel));
+        }
+        for (LightningOuterClass.PendingChannelsResponse.PendingOpenChannel pendingChannel : pending.getPendingOpenChannelsList()) {
+            LightningOuterClass.PendingChannelsResponse.PendingChannel channel = pendingChannel.getChannel();
+            boolean connecting = connectedPeers.contains(channel.getRemoteNodePub());
+            homeChannelRow(channel.getChannelPoint(), number++, connecting ? "Connecting · awaiting channel confirmation" : "Offline · channel opening",
+                connecting ? 0xffffb454 : 0xffed6b73,
+                () -> pendingChannelDetails(channel, "Pending opening · " + pendingChannel.getConfirmationsUntilActive() + " confirmations until active"));
+        }
+    }
+    private void homeChannelRow(String point, int number, String status, int color, Runnable details) {
+        String label = prefs.getString("channel-label-" + point, "");
+        if (label.isEmpty()) label = "Channel " + number;
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(4), dp(10), dp(4), dp(10));
+        TextView name = new TextView(this);
+        name.setText(label); name.setTextSize(16); name.setTextColor(0xffe5eee9);
+        name.setMaxLines(1); name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+        View light = new View(this) {
+            private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            @Override protected void onDraw(android.graphics.Canvas canvas) {
+                super.onDraw(canvas);
+                // A shared clock keeps the pulse smooth across five-second home refreshes.
+                double phase = (android.os.SystemClock.uptimeMillis() % 4000L) * Math.PI * 2 / 4000;
+                paint.setColor(color);
+                paint.setAlpha((int) (255 * (.35 + .65 * (1 - Math.cos(phase)) / 2)));
+                canvas.drawCircle(getWidth() / 2f, getHeight() / 2f, Math.min(getWidth(), getHeight()) / 2f, paint);
+                if (isShown() && getWindowVisibility() == View.VISIBLE) postInvalidateDelayed(50);
+            }
+        };
+        LinearLayout.LayoutParams lightSize = new LinearLayout.LayoutParams(dp(12), dp(12));
+        lightSize.leftMargin = dp(12); lightSize.rightMargin = dp(12);
+        row.addView(light, lightSize);
+        row.setContentDescription(label + ". " + status + ". Tap for channel details.");
+        row.setFocusable(true); row.setOnClickListener(v -> details.run());
+        page.addView(row, new LinearLayout.LayoutParams(-1, -2));
     }
     private void homeScanButton() {
         LinearLayout homePage = page;
