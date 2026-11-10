@@ -71,3 +71,21 @@ Lightning swap receiving (2026-11-10):
   status without writes, wrong identity/network/credentials and secret omission.
   Mainnet wallet configured and updated, but funded phone receive is untested:
   this wallet needs a channel with inbound liquidity first. No payment sent.
+
+Two-emulator desktop testing (2026-11-10):
+  XBT:  AVD xbt-alpha, serial emulator-5554, existing funded test wallet.
+  Zeus: AVD zeus-test, serial emulator-5556, fresh Android storage.
+  Always specify adb -s emulator-5554 or -s emulator-5556; never assume the
+  default device when operating on wallet data or installing an APK.
+  Zeus runs with two virtual CPUs, 2 GiB RAM, software graphics and no snapshots.
+  Start: systemctl --user start zeus-emulator.service
+  Stop:  systemctl --user stop zeus-emulator.service
+  Desktop launcher: Zeus BTC Emulator
+  Script: scripts/run-zeus-emulator-desktop.sh
+  Installed official Zeus v13.2.4 x86_64, APK SHA256:
+  94afbea4665267d3b079163d7590ce4ed7847d1cb9475395a3c83bf045d36ba9
+  Verified signed release manifest (PGP fingerprint
+  96C225207F2137E278C31CF7AAC48DE8AB8DEE84) and APK signing certificate against
+  Zeus's published Android fingerprint. Release files are under .tooling/zeus.
+  Both emulator windows are visible side by side on the Remmina desktop.
+  Zeus is at its welcome screen; no Zeus wallet/seed or node connection created.
