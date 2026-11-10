@@ -319,7 +319,9 @@ public final class MainActivity extends Activity {
         bound = bindService(intent, connection, BIND_AUTO_CREATE);
     }
     private void home() {
-        if (screen.equals("Home") && node != null && node.rpcReady) { refresh(); return; }
+        // Keep the sync screen visible while the asynchronous status query runs.
+        // Replacing it with Home here causes a flash on every startup poll.
+        if ((screen.equals("Home") || screen.equals("Wallet is starting")) && node != null && node.rpcReady) { refresh(); return; }
         page("Home");
         if (node == null) { text("Connecting to node…"); return; }
         text(node.status);
