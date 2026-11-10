@@ -485,7 +485,9 @@ public final class MainActivity extends Activity {
             if (row.getVisibility() == View.VISIBLE && !input.getText().toString().trim().isEmpty() && !code.equals("Off")) {
                 try {
                     long amount = sats();
-                    value = unit == 2 ? String.format(Locale.US, "%,d sats", amount) : BalanceDisplay.format(amount, 2, code, amountPrice());
+                    value = unit == 2
+                        ? (amount >= 1_000_000 ? BalanceDisplay.format(amount, 1, code, null) : String.format(Locale.US, "%,d sats", amount))
+                        : BalanceDisplay.format(amount, 2, code, amountPrice());
                 } catch (IllegalArgumentException ignored) {
                     if (unit == 2 && amountPrice() == null) value = "Exchange rate unavailable";
                 }
