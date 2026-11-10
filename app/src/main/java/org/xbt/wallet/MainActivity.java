@@ -167,7 +167,7 @@ public final class MainActivity extends Activity {
     }
     private void setFieldHint(EditText field, String hint) {
         android.text.SpannableString styled = new android.text.SpannableString(hint);
-        if (hint.toLowerCase(Locale.ROOT).contains("optional") || hint.equals("Leave blank for any amount")) {
+        if (hint.toLowerCase(Locale.ROOT).contains("optional") || hint.equals("Leave blank for any amount") || hint.equals("Invoice")) {
             styled.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.ITALIC),
                 0, styled.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
@@ -1684,7 +1684,20 @@ public final class MainActivity extends Activity {
     }
     private void payment() {
         page("Pay Lightning"); text("XBT invoices only. Review the recipient and amount before paying.");
-        EditText invoice = field("Lightning invoice", "");
+        text("Invoice");
+        EditText invoice = field("Invoice", "");
+        invoice.setContentDescription("Invoice. Tap to paste from clipboard.");
+        invoice.setOnClickListener(v -> {
+            android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
+            ClipData clip = clipboard.getPrimaryClip();
+            CharSequence copied = clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).getText() : null;
+            if (copied == null || copied.toString().trim().isEmpty()) {
+                Toast.makeText(this, "No text on the clipboard", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            invoice.setText(copied.toString().trim());
+            invoice.setSelection(invoice.length());
+        });
         AmountEntry entry = new AmountEntry("Amount", "Enter an amount"); entry.visible(false);
         Runnable detectAmount = () -> {
             final String raw = invoice.getText().toString().trim().replaceFirst("(?i)^lightning:", "");
@@ -1704,7 +1717,9 @@ public final class MainActivity extends Activity {
             public void onTextChanged(CharSequence s, int start, int before, int count) { entry.visible(false); handler.removeCallbacks(detectAmount); handler.postDelayed(detectAmount, 300); }
             public void afterTextChanged(android.text.Editable s) {}
         });
+        text("Label");
         EditText sendLabel = labelField("");
+        setFieldHint(sendLabel, "Optional");
         button("Scan invoice QR", () -> scan(invoice));
         button("Review invoice", () -> {
             String raw = invoice.getText().toString().trim().replaceFirst("(?i)^lightning:", "");
