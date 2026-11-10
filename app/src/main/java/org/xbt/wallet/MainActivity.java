@@ -22,6 +22,54 @@ public final class MainActivity extends Activity {
         config.densityDpi = Math.round(config.densityDpi * UI_SCALE);
         super.attachBaseContext(base.createConfigurationContext(config));
     }
+    private void clearFieldFocusOutside(Window window, android.view.MotionEvent event) {
+        if (event.getActionMasked() != android.view.MotionEvent.ACTION_DOWN) return;
+        View focused = window.getCurrentFocus();
+        if (!(focused instanceof EditText)) return;
+        int[] position = new int[2];
+        focused.getLocationOnScreen(position);
+        android.graphics.Rect bounds = new android.graphics.Rect(position[0], position[1],
+            position[0] + focused.getWidth(), position[1] + focused.getHeight());
+        if (bounds.contains((int) event.getRawX(), (int) event.getRawY())) return;
+        View content = window.findViewById(android.R.id.content);
+        if (content instanceof ViewGroup root) {
+            int policy = root.getDescendantFocusability();
+            root.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
+            root.setFocusableInTouchMode(true);
+            root.requestFocus();
+            root.setDescendantFocusability(policy);
+        } else focused.clearFocus();
+        getSystemService(android.view.inputmethod.InputMethodManager.class)
+            .hideSoftInputFromWindow(focused.getWindowToken(), 0);
+    }
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
+        clearFieldFocusOutside(getWindow(), event);
+        return super.dispatchTouchEvent(event);
+    }
+    private final class WalletDialogBuilder extends AlertDialog.Builder {
+        WalletDialogBuilder() { super(MainActivity.this); }
+        @Override public AlertDialog create() {
+            AlertDialog dialog = super.create();
+            dialog.setOnShowListener(ignored -> {
+                Window window = dialog.getWindow();
+                if (window == null) return;
+                ViewGroup content = window.findViewById(android.R.id.content);
+                if (content == null || content.getChildCount() != 1) return;
+                View body = content.getChildAt(0);
+                ViewGroup.LayoutParams size = body.getLayoutParams();
+                content.removeView(body);
+                FrameLayout wrapper = new FrameLayout(MainActivity.this) {
+                    @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
+                        clearFieldFocusOutside(window, event);
+                        return super.dispatchTouchEvent(event);
+                    }
+                };
+                wrapper.addView(body, new FrameLayout.LayoutParams(-1, -1));
+                content.addView(wrapper, size);
+            });
+            return dialog;
+        }
+    }
     private LinearLayout page, pageHeader;
     private String viewingSwapHash;
     private View walletMenuAnchor;
@@ -222,7 +270,7 @@ public final class MainActivity extends Activity {
         }
         edit.apply();
     }
-    private void error(Exception e) { new AlertDialog.Builder(this).setTitle("Could not complete action").setMessage(e.getMessage()).setPositiveButton("OK", null).show(); }
+    private void error(Exception e) { new WalletDialogBuilder().setTitle("Could not complete action").setMessage(e.getMessage()).setPositiveButton("OK", null).show(); }
     private void work(Job job) {
         if (busy || node == null) return;
         busy = true;
@@ -534,7 +582,7 @@ public final class MainActivity extends Activity {
             labels[i + 1] = code + " · " + java.util.Currency.getInstance(code).getDisplayName();
             if (code.equals(selected)) checked = i + 1;
         }
-        new AlertDialog.Builder(this).setTitle("Fiat currency")
+        new WalletDialogBuilder().setTitle("Fiat currency")
             .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                 android.content.SharedPreferences.Editor edit = prefs.edit();
                 edit.putString("fiat-currency", which == 0 ? "Off" : FiatRates.CURRENCIES[which - 1]);
@@ -604,7 +652,7 @@ public final class MainActivity extends Activity {
     private void labelCoin(LightningOuterClass.Utxo coin) {
         EditText input = new EditText(this); input.setSingleLine(true); input.setHint("Label"); input.setText(coinLabel(coin));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
-        new AlertDialog.Builder(this).setTitle("Label UTXO").setMessage(outpoint(coin)).setView(input)
+        new WalletDialogBuilder().setTitle("Label UTXO").setMessage(outpoint(coin)).setView(input)
             .setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> {
                 String label = input.getText().toString().trim();
                 if (!prefs.edit().putString("utxo-label-" + outpoint(coin), label).commit()) { error(new Exception("Could not save label.")); return; }
@@ -661,7 +709,7 @@ public final class MainActivity extends Activity {
         input.setSingleLine(true); input.setHint("Channel label");
         input.setText(prefs.getString("channel-label-" + point, ""));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
-        new AlertDialog.Builder(this).setTitle("Label channel").setMessage("Leave blank to remove the label.")
+        new WalletDialogBuilder().setTitle("Label channel").setMessage("Leave blank to remove the label.")
             .setView(input).setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> {
                 String label = input.getText().toString().trim();
                 android.content.SharedPreferences.Editor edit = prefs.edit();
@@ -688,7 +736,7 @@ public final class MainActivity extends Activity {
         Button close = button("Close Channel", () -> {
             try {
                 long fee = Policy.amount(rate.getText().toString());
-                new AlertDialog.Builder(this).setTitle("Close this channel?")
+                new WalletDialogBuilder().setTitle("Close this channel?")
                     .setMessage("Your local balance is " + channel.getLocalBalance() + " sats before closing fees.\nFee rate: " + fee + " sats/vbyte.\nThis channel will no longer be available for payments. Funds return on-chain after confirmation.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Close Channel", (dialog, which) -> closeChannel(channel, fee)).show();
@@ -831,10 +879,10 @@ public final class MainActivity extends Activity {
         button("Check connection", () -> work(() -> {
             prepareControllerTransport(address);
             SwapControllers.inspect(address, prefs.getString("network", "regtest"), identity, controllerTor(address));
-            runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Controller reachable")
+            runOnUiThread(() -> new WalletDialogBuilder().setTitle("Controller reachable")
                 .setMessage("The controller responded with its saved identity.").setPositiveButton("OK", null).show());
         }));
-        button("Remove controller", () -> new AlertDialog.Builder(this).setTitle("Remove saved controller?")
+        button("Remove controller", () -> new WalletDialogBuilder().setTitle("Remove saved controller?")
             .setMessage("This removes the controller from this wallet’s list.").setNegativeButton("Cancel", null)
             .setPositiveButton("Remove", (d, w) -> {
                 try {
@@ -934,7 +982,7 @@ public final class MainActivity extends Activity {
         text("Tor runs inside this app. Onion peers need a v3 onion address and P2P port. Changes take effect after restarting the app.");
         button("Test Tor connection", () -> work(() -> {
             node.testTor();
-            runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Tor connected")
+            runOnUiThread(() -> new WalletDialogBuilder().setTitle("Tor connected")
                 .setMessage("Tor established a circuit. The configured node connection is unchanged until you save and restart.")
                 .setPositiveButton("OK", null).show());
         }));
@@ -943,7 +991,7 @@ public final class MainActivity extends Activity {
             try { endpoint = Policy.onionEndpoint(peer.getText().toString()); } catch (Exception e) { error(e); return; }
             work(() -> {
                 node.testTorPeer(endpoint);
-                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Onion peer reachable")
+                runOnUiThread(() -> new WalletDialogBuilder().setTitle("Onion peer reachable")
                     .setMessage("Connected to the peer's P2P port through Tor. Chain synchronization is a separate check.")
                     .setPositiveButton("OK", null).show());
             });
@@ -956,7 +1004,7 @@ public final class MainActivity extends Activity {
                 android.content.SharedPreferences.Editor edit = prefs.edit().putString("syncPeer", endpoint).putBoolean("useTor", tor.isChecked());
                 if (feeSource != null && !feeSource.getText().toString().trim().isEmpty()) edit.putString("feeUrl", Policy.feeUrl(feeSource.getText().toString(), tor.isChecked()));
                 if (!edit.commit()) throw new Exception("Could not save connection.");
-                new AlertDialog.Builder(this).setTitle("Connection saved").setMessage("Restart the app to use this connection. Your wallet and channels are preserved.").setPositiveButton("OK", null).show();
+                new WalletDialogBuilder().setTitle("Connection saved").setMessage("Restart the app to use this connection. Your wallet and channels are preserved.").setPositiveButton("OK", null).show();
             } catch (Exception e) { error(e); }
         });
         button("Back", this::advanced);
@@ -982,7 +1030,7 @@ public final class MainActivity extends Activity {
         EditText input = new EditText(this); input.setSingleLine(true); setFieldHint(input, "Label Optional");
         input.setText(prefs.getString(entry.labelKey, entry.fallbackLabel));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
-        new AlertDialog.Builder(this).setTitle("Edit payment label").setView(input)
+        new WalletDialogBuilder().setTitle("Edit payment label").setView(input)
             .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
                 // Persist empty overrides too, so clearing a label cannot resurrect a backend label.
                 if (!prefs.edit().putString(entry.labelKey, input.getText().toString().trim()).commit()) {
@@ -1093,7 +1141,7 @@ public final class MainActivity extends Activity {
                     for (EditText entry : entries) entered.add(entry.getText().toString().trim());
                     String expected = new Vault(this).get("seed");
                     if (!SeedCheck.matches(expected, entered)) {
-                        new AlertDialog.Builder(this).setTitle("Backup does not match")
+                        new WalletDialogBuilder().setTitle("Backup does not match")
                             .setMessage("Check that every word is entered in the correct numbered position.")
                             .setPositiveButton("Try again", null).show();
                         return;
@@ -1269,7 +1317,7 @@ public final class MainActivity extends Activity {
                                 .setSatPerVbyte(rate).setMinConfs(1).setPrivate(!publish)
                                 .setCommitmentType(LightningOuterClass.CommitmentType.ANCHORS);
                             for (LightningOuterClass.Utxo c : chosen) req.addOutpoints(c.getOutpoint());
-                            runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Open XBT channel?")
+                            runOnUiThread(() -> new WalletDialogBuilder().setTitle("Open XBT channel?")
                                 .setMessage((publish ? "Public channel" : "Private channel")
                                     + "\nFunds to use: " + displayAmount(budget)
                                     + "\nEstimated network fee: " + displayAmount(plan.fee)
@@ -1453,7 +1501,7 @@ public final class MainActivity extends Activity {
                         .putAddrToAmount(recipient, Math.min(plan.amount, 1000)).setTargetConf(6).setMinConfs(1);
                     for (LightningOuterClass.Utxo coin : chosen) validation.addInputs(coin.getOutpoint());
                     node.rpc("estimateFee", validation.build());
-                    runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Send on chain?")
+                    runOnUiThread(() -> new WalletDialogBuilder().setTitle("Send on chain?")
                         .setMessage("Recipient: " + recipient + "\n" + amountReview(Math.multiplyExact(plan.amount, 1000), reviewPrice) + "\n" + paymentSummary(plan) + "\nFee rate: " + rate + " sat/vbyte"
                             + (max ? "" : "\nRecipient amount is fixed; the network fee is paid in addition."))
                         .setNegativeButton("Cancel", null).setPositiveButton("Send", (d, w) -> work(() -> {
@@ -1516,7 +1564,7 @@ public final class MainActivity extends Activity {
                 if (available.isEmpty()) { controllerAdd("", ""); return; }
                 String[] names = new String[available.size()];
                 for (int i=0;i<names.length;i++) names[i]=available.get(i).optString("label", available.get(i).optString("name"));
-                new AlertDialog.Builder(this).setTitle("Swap controller").setItems(names, (d,which) -> {
+                new WalletDialogBuilder().setTitle("Swap controller").setItems(names, (d,which) -> {
                     org.json.JSONObject item=available.get(which); String id=item.optString("provider");
                     prefs.edit().putString("receive-provider",id).apply();
                     if (!prefs.contains("receive-key-"+id)) controllerReceiveSetup(item);
@@ -1703,7 +1751,7 @@ public final class MainActivity extends Activity {
             LinearLayout.LayoutParams pasteSize = new LinearLayout.LayoutParams(0, dp(72), 1);
             scanSize.rightMargin = dp(4); pasteSize.leftMargin = dp(4);
             choices.addView(scanChoice, scanSize); choices.addView(pasteChoice, pasteSize);
-            AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Invoice").setView(choices).create();
+            AlertDialog dialog = new WalletDialogBuilder().setTitle("Invoice").setView(choices).create();
             scanChoice.setOnClickListener(choice -> { dialog.dismiss(); scan(invoice); });
             pasteChoice.setOnClickListener(choice -> {
                 android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
@@ -1761,7 +1809,7 @@ public final class MainActivity extends Activity {
                 if (!Policy.invoiceAllowed(true, msats, pay.getTimestamp(), pay.getExpiry(), System.currentTimeMillis()/1000)) throw new Exception("This invoice has expired or has an invalid amount.");
                 if (prefs.contains("payment-" + pay.getPaymentHash())) throw new Exception("This invoice already has a recorded attempt. Reconcile its status before retrying.");
                 long feeLimit = Math.max(1, msats/1000/100);
-                runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("Pay XBT invoice?").setMessage(amountReview(msats, reviewPrice) + "\nMaximum routing fee: " + displayAmount(feeLimit) + "\nRecipient: " + pay.getDestination())
+                runOnUiThread(() -> new WalletDialogBuilder().setTitle("Pay XBT invoice?").setMessage(amountReview(msats, reviewPrice) + "\nMaximum routing fee: " + displayAmount(feeLimit) + "\nRecipient: " + pay.getDestination())
                     .setNegativeButton("Cancel",null).setPositiveButton("Pay",(d,w)->work(()->{
                         if (!prefs.edit().putString("payment-" + pay.getPaymentHash(), "submitted").putString("payment-label-" + pay.getPaymentHash(), paymentLabel).commit()) throw new Exception("Could not record payment");
                         routerrpc.RouterOuterClass.SendPaymentRequest.Builder request = routerrpc.RouterOuterClass.SendPaymentRequest.newBuilder()
