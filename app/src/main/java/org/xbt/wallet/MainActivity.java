@@ -157,8 +157,16 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.topMargin = dp(5); params.bottomMargin = dp(5);
         page.addView(b, params); b.setOnClickListener(v -> { if (!busy) action.run(); }); return b;
     }
+    private void setFieldHint(EditText field, String hint) {
+        android.text.SpannableString styled = new android.text.SpannableString(hint);
+        if (hint.toLowerCase(Locale.ROOT).contains("optional")) {
+            styled.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.ITALIC),
+                0, styled.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        }
+        field.setHint(styled);
+    }
     private EditText field(String hint, String value) {
-        EditText e = new EditText(this); e.setHint(hint); e.setText(value); e.setSingleLine(true); e.setTextSize(16);
+        EditText e = new EditText(this); setFieldHint(e, hint); e.setText(value); e.setSingleLine(true); e.setTextSize(16);
         e.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}}, new int[]{0xff6c7c73,0xffeef5f0}));
         e.setHintTextColor(0xff8d9f94); e.setPadding(dp(14), dp(14), dp(14), dp(14)); e.setMinimumHeight(dp(54));
         android.graphics.drawable.StateListDrawable background = new android.graphics.drawable.StateListDrawable();
@@ -963,7 +971,7 @@ public final class MainActivity extends Activity {
         }
     }
     private void editHistoryLabel(HistoryEntry entry, Runnable refresh) {
-        EditText input = new EditText(this); input.setSingleLine(true); input.setHint("Label Optional");
+        EditText input = new EditText(this); input.setSingleLine(true); setFieldHint(input, "Label Optional");
         input.setText(prefs.getString(entry.labelKey, entry.fallbackLabel));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
         new AlertDialog.Builder(this).setTitle("Edit payment label").setView(input)
@@ -1127,7 +1135,7 @@ public final class MainActivity extends Activity {
                     Toast.makeText(this, "Address copied", Toast.LENGTH_SHORT).show();
                 });
                 EditText receiveLabel = labelField(prefs.getString("receive-label", ""));
-                receiveLabel.setHint("Label (optional)");
+                setFieldHint(receiveLabel, "Label (optional)");
                 prefs.edit().putString("receive-label-address", address).putStringSet("receive-label-baseline", baseline).apply();
                 receiveLabel.addTextChangedListener(new android.text.TextWatcher() {
                     public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -1487,7 +1495,7 @@ public final class MainActivity extends Activity {
         memo.setSingleLine(false); memo.setMaxLines(3);
         memo.setContentDescription("Description Optional - sender can see this");
         text("Label");
-        EditText privateLabel = labelField(""); privateLabel.setHint("Optional - for your own records");
+        EditText privateLabel = labelField(""); setFieldHint(privateLabel, "Optional - for your own records");
         privateLabel.setSingleLine(false); privateLabel.setMaxLines(3);
         privateLabel.setContentDescription("Label Optional - for your own records");
         Button controller = button("Select swap controller", () -> {
@@ -1512,8 +1520,8 @@ public final class MainActivity extends Activity {
         Button receipts = button("Swap requests", this::swapReceipts); receipts.setVisibility(View.GONE);
         swaps.setOnCheckedChangeListener((v,enabled) -> {
             amountTitle.setText("Amount");
-            amount.setHint(enabled ? "Required for swaps" : "Optional");
-            memo.setHint(enabled ? "Optional - for your XBT invoice" : "Optional - sender can see this");
+            setFieldHint(amount, enabled ? "Required for swaps" : "Optional");
+            setFieldHint(memo, enabled ? "Optional - for your XBT invoice" : "Optional - sender can see this");
             controller.setVisibility(enabled ? View.VISIBLE : View.GONE); receipts.setVisibility(enabled ? View.VISIBLE : View.GONE);
         });
         button("Create invoice", () -> {
