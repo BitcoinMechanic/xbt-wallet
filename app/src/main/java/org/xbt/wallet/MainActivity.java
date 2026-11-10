@@ -195,10 +195,13 @@ public final class MainActivity extends Activity {
         android.graphics.drawable.GradientDrawable background = new android.graphics.drawable.GradientDrawable(
             android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
             new int[]{0xfff4e5c7, 0xffe8d2a7, 0xffd9bd8c});
-        background.setCornerRadius(dp(12)); background.setStroke(dp(1), 0xffb79867);
+        background.setStroke(dp(1), 0xffb79867);
         qr.setBackground(background);
-        qr.setPadding(dp(8), dp(8), dp(8), dp(8));
-        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, height + dp(16));
+        int gap = dp(5);
+        qr.setPadding(gap, gap, gap, gap);
+        int edge = Math.min(height + 2 * gap, getResources().getDisplayMetrics().widthPixels - dp(40));
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(edge, edge);
+        size.gravity = Gravity.CENTER_HORIZONTAL;
         size.topMargin = dp(8); size.bottomMargin = dp(8);
         page.addView(qr, size);
     }
