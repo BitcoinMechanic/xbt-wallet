@@ -224,6 +224,7 @@ public final class MainActivity extends Activity {
         if (title.equals("Home")) {
             Button menu = new Button(this); styleButton(menu, false);
             menu.setText("⋮"); menu.setTextSize(25); menu.setPadding(0, 0, 0, 0);
+            menu.setBackground(null);
             menu.setContentDescription("Wallet menu");
             FrameLayout.LayoutParams menuSize = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL);
             header.addView(menu, menuSize); walletMenuAnchor = menu; menu.setOnClickListener(v -> more());
