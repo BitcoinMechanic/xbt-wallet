@@ -514,7 +514,7 @@ public final class MainActivity extends Activity {
         homePage.addOnLayoutChangeListener((v, l, t, r, b, oldL, oldT, oldR, oldB) -> {
             View viewport = (View) homePage.getParent();
             int height = viewport.getHeight() - viewport.getPaddingTop() - viewport.getPaddingBottom();
-            int gap = Math.max(dp(24), Math.round(height * 2f / 3f) - spacer.getTop() - scan.getHeight() / 2);
+            int gap = Math.max(dp(24), Math.round(height * (2f / 3f + .10f)) - spacer.getTop() - scan.getHeight() / 2);
             if (spacer.getLayoutParams().height != gap) {
                 spacer.getLayoutParams().height = gap;
                 spacer.requestLayout();
