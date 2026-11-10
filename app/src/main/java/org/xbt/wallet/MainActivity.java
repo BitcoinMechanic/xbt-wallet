@@ -72,6 +72,8 @@ public final class MainActivity extends Activity {
     }
     private LinearLayout page;
     private FrameLayout pageHeader;
+    private ImageView headerBrand;
+    private TextView headerRate;
     private String viewingSwapHash;
     private View walletMenuAnchor;
     private PopupMenu walletPopup;
@@ -153,11 +155,24 @@ public final class MainActivity extends Activity {
         });
         scroll.addView(page); setContentView(scroll);
         FrameLayout header = new FrameLayout(this); pageHeader = header;
-        ImageView brand = new ImageView(this);
+        ImageView brand = new ImageView(this); headerBrand = brand;
         brand.setImageResource(org.xbt.wallet.R.drawable.xbt_logo);
-        brand.setContentDescription("XBT");
+        brand.setContentDescription("XBT. Tap to show the fiat exchange rate.");
         brand.setScaleType(ImageView.ScaleType.FIT_CENTER);
         header.addView(brand, new FrameLayout.LayoutParams(dp(200), dp(72), Gravity.CENTER));
+        headerRate = new TextView(this);
+        headerRate.setGravity(Gravity.CENTER); headerRate.setTextSize(20);
+        headerRate.setTextColor(0xffe8d2a7);
+        headerRate.setMaxLines(3);
+        header.addView(headerRate, new FrameLayout.LayoutParams(dp(200), dp(72), Gravity.CENTER));
+        View.OnClickListener toggleRate = v -> {
+            prefs.edit().putBoolean("header-fiat-rate", !prefs.getBoolean("header-fiat-rate", false)).apply();
+            updateHeaderRate();
+            if (prefs.getBoolean("header-fiat-rate", false) && !prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
+        };
+        brand.setOnClickListener(toggleRate); headerRate.setOnClickListener(toggleRate);
+        updateHeaderRate();
+        if (prefs.getBoolean("header-fiat-rate", false) && !prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         if (title.equals("Home")) {
             Button menu = new Button(this); styleButton(menu, false);
             menu.setText("⋮"); menu.setTextSize(25); menu.setPadding(0, 0, 0, 0);
@@ -172,6 +187,26 @@ public final class MainActivity extends Activity {
             heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
             heading.setPadding(0, 0, 0, dp(20));
         }
+    }
+    private void updateHeaderRate() {
+        if (headerBrand == null || headerRate == null) return;
+        boolean show = prefs.getBoolean("header-fiat-rate", false);
+        headerBrand.setVisibility(show ? View.GONE : View.VISIBLE);
+        headerRate.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) return;
+        String currency = prefs.getString("fiat-currency", "USD");
+        java.math.BigDecimal price = amountPrice();
+        String value;
+        if (currency.equals("Off")) value = "Fiat display is off";
+        else if (price == null) value = "1 XBT\n" + currency + " rate unavailable";
+        else {
+            java.text.NumberFormat format = java.text.NumberFormat.getNumberInstance(Locale.US);
+            int decimals = Math.max(0, java.util.Currency.getInstance(currency).getDefaultFractionDigits());
+            format.setMinimumFractionDigits(decimals); format.setMaximumFractionDigits(decimals);
+            value = "1 XBT\n≈ " + format.format(price) + " " + currency;
+        }
+        headerRate.setText(value);
+        headerRate.setContentDescription(value + ". Tap to show the XBT logo.");
     }
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private android.graphics.drawable.GradientDrawable surface(int color, int radius, int border) {
@@ -515,6 +550,7 @@ public final class MainActivity extends Activity {
                     fiatRates = fetched;
                     prefs.edit().putString("fiat-rates", fetched.toString()).apply();
                 }
+                updateHeaderRate();
                 if (screen.equals("Home")) updateBalanceAmounts();
                 if (activeAmountEntry != null) {
                     activeAmountEntry.changed.run();
@@ -641,6 +677,8 @@ public final class MainActivity extends Activity {
                 if (which == 0 && prefs.getInt("display-unit", 0) == 2) edit.putInt("display-unit", 0);
                 edit.apply();
                 updateBalanceAmounts();
+                updateHeaderRate();
+                if (prefs.getBoolean("header-fiat-rate", false) && which != 0) fetchFiatRates();
                 dialog.dismiss();
             }).setNegativeButton("Cancel", null).show();
     }
