@@ -1688,20 +1688,34 @@ public final class MainActivity extends Activity {
         EditText invoice = field("ln...", "");
         invoice.setShowSoftInputOnFocus(false);
         invoice.setContentDescription("Invoice. Tap to scan a QR code or paste from clipboard.");
-        invoice.setOnClickListener(v -> new AlertDialog.Builder(this)
-            .setTitle("Invoice")
-            .setNegativeButton("Scan QR", (dialog, which) -> scan(invoice))
-            .setPositiveButton("Paste from Clipboard", (dialog, which) -> {
-            android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
-            ClipData clip = clipboard.getPrimaryClip();
-            CharSequence copied = clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).getText() : null;
-            if (copied == null || copied.toString().trim().isEmpty()) {
-                Toast.makeText(this, "No text on the clipboard", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            invoice.setText(copied.toString().trim());
-            invoice.setSelection(invoice.length());
-        }).show());
+        invoice.setOnClickListener(v -> {
+            LinearLayout choices = new LinearLayout(this);
+            choices.setOrientation(LinearLayout.HORIZONTAL);
+            choices.setPadding(dp(20), dp(12), dp(20), dp(20));
+            Button scanChoice = new Button(this), pasteChoice = new Button(this);
+            styleButton(scanChoice, false); styleButton(pasteChoice, false);
+            scanChoice.setText("Scan QR"); pasteChoice.setText("Paste from Clipboard");
+            LinearLayout.LayoutParams scanSize = new LinearLayout.LayoutParams(0, dp(72), 1);
+            LinearLayout.LayoutParams pasteSize = new LinearLayout.LayoutParams(0, dp(72), 1);
+            scanSize.rightMargin = dp(4); pasteSize.leftMargin = dp(4);
+            choices.addView(scanChoice, scanSize); choices.addView(pasteChoice, pasteSize);
+            AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Invoice").setView(choices).create();
+            scanChoice.setOnClickListener(choice -> { dialog.dismiss(); scan(invoice); });
+            pasteChoice.setOnClickListener(choice -> {
+                android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
+                ClipData clip = clipboard.getPrimaryClip();
+                CharSequence copied = clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).getText() : null;
+                if (copied == null || copied.toString().trim().isEmpty()) {
+                    Toast.makeText(this, "No text on the clipboard", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                invoice.setText(copied.toString().trim());
+                invoice.setSelection(invoice.length());
+                dialog.dismiss();
+            });
+            dialog.show();
+            if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff101517, 18, 0xff304037));
+        });
         AmountEntry entry = new AmountEntry("Amount", "Enter an amount"); entry.visible(false);
         Runnable detectAmount = () -> {
             final String raw = invoice.getText().toString().trim().replaceFirst("(?i)^lightning:", "");
