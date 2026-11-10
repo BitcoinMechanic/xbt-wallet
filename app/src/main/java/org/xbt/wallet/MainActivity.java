@@ -1001,7 +1001,7 @@ public final class MainActivity extends Activity {
             for (LightningOuterClass.Transaction tx : previous.getTransactionsList()) baseline.add(tx.getTxHash());
             runOnUiThread(() -> {
                 receivingAddress = address; receiveBaseline = baseline; page("Receive XBT");
-                text("Amount in sats Optional");
+                text("Amount in sats (optional)");
                 EditText amount = field("Leave blank for any amount", "");
                 amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
                 ImageView qr = new ImageView(this); qr.setContentDescription("Deposit payment request QR code");
@@ -1017,6 +1017,7 @@ public final class MainActivity extends Activity {
                     Toast.makeText(this, "Address copied", Toast.LENGTH_SHORT).show();
                 });
                 EditText receiveLabel = labelField(prefs.getString("receive-label", ""));
+                receiveLabel.setHint("Label (optional)");
                 prefs.edit().putString("receive-label-address", address).putStringSet("receive-label-baseline", baseline).apply();
                 receiveLabel.addTextChangedListener(new android.text.TextWatcher() {
                     public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
