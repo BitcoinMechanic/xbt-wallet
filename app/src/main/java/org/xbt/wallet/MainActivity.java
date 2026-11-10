@@ -1431,10 +1431,15 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.Utxo coin : selected) total = Math.addExact(total, coin.getAmountSat());
                 selectedTotal.setText("Selected: " + displayAmount(total));
                 OnChainPayment.Request request = OnChainPayment.parse(address.getText().toString());
-                OnChainPayment plan = onChainPreview(selected, available, wallet, request.address,
-                    useAll.isChecked() ? 0 : entry.sats(), Policy.amount(fee.getText().toString()), useAll.isChecked());
+                boolean provisional = selected.isEmpty();
+                boolean amountMissing = !useAll.isChecked() && amount.getText().toString().trim().isEmpty();
+                List<LightningOuterClass.Utxo> estimateInputs = provisional ? available.getUtxosList() : selected;
+                OnChainPayment plan = onChainPreview(estimateInputs, available, wallet, request.address,
+                    useAll.isChecked() ? 0 : amountMissing ? 546 : entry.sats(), Policy.amount(fee.getText().toString()), useAll.isChecked());
                 if (useAll.isChecked()) entry.setSats(plan.amount);
-                summary.setText(paymentSummary(plan) + (request.address.isEmpty()
+                summary.setText((amountMissing ? "Recipient receives: —\nEstimated network fee: " + displayAmount(plan.fee)
+                    + "\nTotal including fee: —" : paymentSummary(plan))
+                    + (provisional ? "\nEstimate uses available outputs. Select outputs to refine it." : "") + (request.address.isEmpty()
                     ? "\nFee estimated until a recipient address is entered." : ""));
             } catch (Exception e) {
                 if (useAll.isChecked()) amount.setText("");
@@ -1522,6 +1527,7 @@ public final class MainActivity extends Activity {
             } catch (Exception e) { error(e); }
         });
         button("Home", this::home);
+        update.run();
     }
     private OnChainPayment freshOnChainPreview(List<LightningOuterClass.Utxo> chosen, String address, long amount, long rate, boolean max) throws Exception {
         LightningOuterClass.ListUnspentResponse available = LightningOuterClass.ListUnspentResponse.parseFrom(node.rpc("listUnspent",
