@@ -550,6 +550,7 @@ public final class MainActivity extends Activity {
         }
         balanceRow.addView(chain, new LinearLayout.LayoutParams(0, -2, index == 0 ? 1.2f : 1f));
         Button amount = new Button(this); styleButton(amount, false);
+        amount.setBackground(null);
         amount.setTextColor(0xffa8efd5); amount.setTextSize(17); amount.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         balanceAmounts[index] = amount;
         amount.setOnClickListener(v -> {
