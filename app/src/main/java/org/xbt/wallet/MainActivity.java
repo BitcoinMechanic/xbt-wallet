@@ -70,7 +70,8 @@ public final class MainActivity extends Activity {
             return dialog;
         }
     }
-    private LinearLayout page, pageHeader;
+    private LinearLayout page;
+    private FrameLayout pageHeader;
     private String viewingSwapHash;
     private View walletMenuAnchor;
     private PopupMenu walletPopup;
@@ -149,22 +150,17 @@ public final class MainActivity extends Activity {
             return insets;
         });
         scroll.addView(page); setContentView(scroll);
-        LinearLayout header = new LinearLayout(this); pageHeader = header; header.setGravity(Gravity.CENTER_VERTICAL);
+        FrameLayout header = new FrameLayout(this); pageHeader = header;
         ImageView brand = new ImageView(this);
         brand.setImageResource(org.xbt.wallet.R.drawable.xbt_logo);
         brand.setContentDescription("XBT");
         brand.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        header.addView(brand, new LinearLayout.LayoutParams(0, dp(72), 1));
-        TextView network = new TextView(this);
-        network.setText("ALPHA · " + prefs.getString("network", "regtest").toUpperCase(Locale.ROOT));
-        network.setTextSize(10); network.setLetterSpacing(0.08f); network.setTextColor(0xff9aaea6);
-        network.setPadding(dp(10), dp(6), dp(10), dp(6)); network.setBackground(surface(0xff1b2925, 20, 0xff2d4038));
-        header.addView(network);
+        header.addView(brand, new FrameLayout.LayoutParams(dp(200), dp(72), Gravity.CENTER));
         if (title.equals("Home")) {
             Button menu = new Button(this); styleButton(menu, false);
             menu.setText("⋮"); menu.setTextSize(25); menu.setPadding(0, 0, 0, 0);
             menu.setContentDescription("Wallet menu");
-            LinearLayout.LayoutParams menuSize = new LinearLayout.LayoutParams(dp(48), dp(48)); menuSize.leftMargin = dp(10);
+            FrameLayout.LayoutParams menuSize = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL);
             header.addView(menu, menuSize); walletMenuAnchor = menu; menu.setOnClickListener(v -> more());
         }
         LinearLayout.LayoutParams headerSize = new LinearLayout.LayoutParams(-1, -2); headerSize.bottomMargin = dp(24);
@@ -1542,7 +1538,7 @@ public final class MainActivity extends Activity {
         swapsLabel.setPadding(dp(6), 0, 0, 0); swapsLabel.setOnClickListener(v -> swaps.performClick());
         swapToggle.addView(swapsLabel);
         swaps.setContentDescription("Swaps — receive BTC as XBT");
-        LinearLayout.LayoutParams toggleSize = new LinearLayout.LayoutParams(-2, -2); toggleSize.leftMargin = dp(12);
+        FrameLayout.LayoutParams toggleSize = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.CENTER_VERTICAL);
         pageHeader.addView(swapToggle, toggleSize);
         AmountEntry entry = new AmountEntry("Amount", "Optional");
         TextView amountTitle = entry.title;
