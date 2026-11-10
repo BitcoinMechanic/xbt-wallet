@@ -150,10 +150,11 @@ public final class MainActivity extends Activity {
         });
         scroll.addView(page); setContentView(scroll);
         LinearLayout header = new LinearLayout(this); pageHeader = header; header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView brand = new TextView(this); brand.setText("XBT"); brand.setTextSize(25);
-        brand.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)); brand.setTextColor(0xffa8efd5);
-        brand.setLetterSpacing(0.08f);
-        header.addView(brand, new LinearLayout.LayoutParams(0, dp(48), 1)); brand.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView brand = new ImageView(this);
+        brand.setImageResource(org.xbt.wallet.R.drawable.xbt_logo);
+        brand.setContentDescription("XBT");
+        brand.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        header.addView(brand, new LinearLayout.LayoutParams(0, dp(72), 1));
         TextView network = new TextView(this);
         network.setText("ALPHA · " + prefs.getString("network", "regtest").toUpperCase(Locale.ROOT));
         network.setTextSize(10); network.setLetterSpacing(0.08f); network.setTextColor(0xff9aaea6);

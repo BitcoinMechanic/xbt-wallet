@@ -1,0 +1,6 @@
+Source: xbt-logo.png (original user sketch, retained).
+Output: app/src/main/res/drawable-nodpi/xbt_logo.png
+Tool: built-in image_gen; transparent_background=true.
+
+Final cleanup prompt:
+Clean up this logo for production: retain the exact XBT letters and two looping side flourishes, but REMOVE ALL surrounding red haze, spray, noise, texture, speckles, shadow, bevel, black outlines and glow. Only the solid clean silhouettes of XBT and the two flourishes should remain visible; everything else must be fully transparent. Use one uniform flat light warm red (#ed7770) for all solid logo strokes. Smooth crisp antialiased edges. No texture anywhere. No background. No decoration added. Keep the logo horizontal, tightly framed with even transparent padding. This is a minimal flat app-header brand asset, not an illustration.
