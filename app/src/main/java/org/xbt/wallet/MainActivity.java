@@ -1691,6 +1691,8 @@ public final class MainActivity extends Activity {
         invoice.setOnClickListener(v -> {
             LinearLayout choices = new LinearLayout(this);
             choices.setOrientation(LinearLayout.HORIZONTAL);
+            choices.setBaselineAligned(false);
+            choices.setGravity(Gravity.CENTER_VERTICAL);
             choices.setPadding(dp(20), dp(12), dp(20), dp(20));
             Button scanChoice = new Button(this), pasteChoice = new Button(this);
             styleButton(scanChoice, false); styleButton(pasteChoice, false);
