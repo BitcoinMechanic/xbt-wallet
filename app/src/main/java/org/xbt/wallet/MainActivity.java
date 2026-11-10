@@ -163,7 +163,7 @@ public final class MainActivity extends Activity {
         page.addView(e, params); return e;
     }
     private EditText labelField(String value) {
-        EditText label = field("Label optional", value);
+        EditText label = field("Label Optional", value);
         label.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
         return label;
     }
@@ -852,7 +852,7 @@ public final class MainActivity extends Activity {
         }
     }
     private void editHistoryLabel(HistoryEntry entry, Runnable refresh) {
-        EditText input = new EditText(this); input.setSingleLine(true); input.setHint("Label optional");
+        EditText input = new EditText(this); input.setSingleLine(true); input.setHint("Label Optional");
         input.setText(prefs.getString(entry.labelKey, entry.fallbackLabel));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
         new AlertDialog.Builder(this).setTitle("Edit payment label").setView(input)
@@ -1001,7 +1001,7 @@ public final class MainActivity extends Activity {
             for (LightningOuterClass.Transaction tx : previous.getTransactionsList()) baseline.add(tx.getTxHash());
             runOnUiThread(() -> {
                 receivingAddress = address; receiveBaseline = baseline; page("Receive XBT");
-                text("Amount in sats optional");
+                text("Amount in sats Optional");
                 EditText amount = field("Leave blank for any amount", "");
                 amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
                 ImageView qr = new ImageView(this); qr.setContentDescription("Deposit payment request QR code");
@@ -1363,17 +1363,17 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams toggleSize = new LinearLayout.LayoutParams(-2, -2); toggleSize.leftMargin = dp(12);
         pageHeader.addView(swapToggle, toggleSize);
         TextView amountTitle = text("Amount in sats");
-        EditText amount = field("optional", "");
-        amount.setContentDescription("Amount in sats optional");
+        EditText amount = field("Optional", "");
+        amount.setContentDescription("Amount in sats Optional");
         amount.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         text("Description");
-        EditText memo = field("optional - sender can see this", "");
+        EditText memo = field("Optional - sender can see this", "");
         memo.setSingleLine(false); memo.setMaxLines(3);
-        memo.setContentDescription("Description optional - sender can see this");
+        memo.setContentDescription("Description Optional - sender can see this");
         text("Label");
-        EditText privateLabel = labelField(""); privateLabel.setHint("optional - for your own records");
+        EditText privateLabel = labelField(""); privateLabel.setHint("Optional - for your own records");
         privateLabel.setSingleLine(false); privateLabel.setMaxLines(3);
-        privateLabel.setContentDescription("Label optional - for your own records");
+        privateLabel.setContentDescription("Label Optional - for your own records");
         Button controller = button("Select swap controller", () -> {
             try {
                 org.json.JSONArray saved = savedControllers(); java.util.List<org.json.JSONObject> available = new ArrayList<>();
@@ -1396,8 +1396,8 @@ public final class MainActivity extends Activity {
         Button receipts = button("Swap requests", this::swapReceipts); receipts.setVisibility(View.GONE);
         swaps.setOnCheckedChangeListener((v,enabled) -> {
             amountTitle.setText(enabled ? "XBT sats to receive" : "Amount in sats");
-            amount.setHint(enabled ? "Required for swaps" : "optional");
-            memo.setHint(enabled ? "optional - for your XBT invoice" : "optional - sender can see this");
+            amount.setHint(enabled ? "Required for swaps" : "Optional");
+            memo.setHint(enabled ? "Optional - for your XBT invoice" : "Optional - sender can see this");
             controller.setVisibility(enabled ? View.VISIBLE : View.GONE); receipts.setVisibility(enabled ? View.VISIBLE : View.GONE);
         });
         button("Create invoice", () -> {
