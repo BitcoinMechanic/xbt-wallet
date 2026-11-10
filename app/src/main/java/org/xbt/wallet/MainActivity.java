@@ -192,7 +192,11 @@ public final class MainActivity extends Activity {
     }
     private void addQrFrame(ImageView qr, int height) {
         qr.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        qr.setBackground(surface(0xffffffff, 12, 0xff8d9f94));
+        android.graphics.drawable.GradientDrawable background = new android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+            new int[]{0xfff4e5c7, 0xffe8d2a7, 0xffd9bd8c});
+        background.setCornerRadius(dp(12)); background.setStroke(dp(1), 0xffb79867);
+        qr.setBackground(background);
         qr.setPadding(dp(8), dp(8), dp(8), dp(8));
         LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, height + dp(16));
         size.topMargin = dp(8); size.bottomMargin = dp(8);
@@ -1203,7 +1207,7 @@ public final class MainActivity extends Activity {
                         String value = OnChainPayment.receiveRequest(address, amount.getText().toString().trim().isEmpty() ? "" : Long.toString(entry.sats()));
                         BitMatrix matrix = new MultiFormatWriter().encode(value, BarcodeFormat.QR_CODE, 640, 640);
                         Bitmap bitmap = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888);
-                        for (int y = 0; y < 640; y++) for (int x = 0; x < 640; x++) bitmap.setPixel(x, y, matrix.get(x,y) ? 0xff000000 : 0xffffffff);
+                        for (int y = 0; y < 640; y++) for (int x = 0; x < 640; x++) bitmap.setPixel(x, y, matrix.get(x,y) ? 0xff000000 : 0x00000000);
                         request[0] = value; qr.setImageBitmap(bitmap); qr.setVisibility(View.VISIBLE);
                         copy.setEnabled(true); validation.setVisibility(View.GONE);
                     } catch (Exception e) {
@@ -1602,7 +1606,7 @@ public final class MainActivity extends Activity {
                 String invoice = result.getPaymentRequest();
                 BitMatrix matrix = new MultiFormatWriter().encode(invoice, BarcodeFormat.QR_CODE, 640, 640);
                 Bitmap bitmap = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888);
-                for (int y = 0; y < 640; y++) for (int x = 0; x < 640; x++) bitmap.setPixel(x, y, matrix.get(x,y) ? 0xff000000 : 0xffffffff);
+                for (int y = 0; y < 640; y++) for (int x = 0; x < 640; x++) bitmap.setPixel(x, y, matrix.get(x,y) ? 0xff000000 : 0x00000000);
                 runOnUiThread(() -> {
                     receivingInvoiceHash = result.getRHash();
                     page("Lightning invoice"); text((sats == 0 ? "Sender chooses the amount" : displayAmount(sats)) + " · Expires in 1 hour");
@@ -1705,7 +1709,7 @@ public final class MainActivity extends Activity {
                     String invoice=reply.getString("invoice");
                     BitMatrix matrix=new MultiFormatWriter().encode(invoice,BarcodeFormat.QR_CODE,640,640);
                     Bitmap bitmap=Bitmap.createBitmap(640,640,Bitmap.Config.ARGB_8888);
-                    for(int y=0;y<640;y++) for(int x=0;x<640;x++) bitmap.setPixel(x,y,matrix.get(x,y)?0xff000000:0xffffffff);
+                    for(int y=0;y<640;y++) for(int x=0;x<640;x++) bitmap.setPixel(x,y,matrix.get(x,y)?0xff000000:0x00000000);
                     ImageView qr=new ImageView(this);qr.setImageBitmap(bitmap);qr.setContentDescription("BTC Lightning invoice QR code");
                     addQrFrame(qr, dp(280));
                     button("Copy BTC invoice",()->getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("BTC Lightning invoice",invoice)));
