@@ -183,14 +183,18 @@ public final class MainActivity extends Activity {
                 saved = canvas.save();
                 canvas.clipRect(x + .26f * w, y, x + .74f * w, y + h);
                 canvas.clipOutPath(wings);
-                canvas.translate(-headerSlide * dp(100), 0);
+                canvas.translate(-headerSlide * dp(110), 0);
+                // Also clip the source after translating, so the opposite flourish
+                // cannot slide into the center along with the lettering.
+                canvas.clipRect(x + .26f * w, y, x + .74f * w, y + h);
+                canvas.clipOutPath(wings);
                 super.onDraw(canvas); canvas.restoreToCount(saved);
             }
         }; headerBrand = brand;
         brand.setImageResource(org.xbt.wallet.R.drawable.xbt_logo);
         brand.setContentDescription("XBT. Tap to show the fiat exchange rate.");
         brand.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        header.addView(brand, new FrameLayout.LayoutParams(dp(200), dp(72), Gravity.CENTER));
+        header.addView(brand, new FrameLayout.LayoutParams(dp(220), dp(79.2f), Gravity.CENTER));
         headerRate = new TextView(this);
         headerRate.setGravity(Gravity.CENTER); headerRate.setTextSize(20);
         headerRate.setTextColor(0xffe8d2a7);
@@ -199,7 +203,7 @@ public final class MainActivity extends Activity {
         FrameLayout rateViewport = new FrameLayout(this);
         rateViewport.setClipChildren(true);
         rateViewport.addView(headerRate, new FrameLayout.LayoutParams(-1, -1));
-        header.addView(rateViewport, new FrameLayout.LayoutParams(dp(70), dp(72), Gravity.CENTER));
+        header.addView(rateViewport, new FrameLayout.LayoutParams(dp(77), dp(79.2f), Gravity.CENTER));
         View.OnClickListener toggleRate = v -> {
             prefs.edit().putBoolean("header-fiat-rate", !prefs.getBoolean("header-fiat-rate", false)).apply();
             if (headerSlideAnimation != null) headerSlideAnimation.cancel();
@@ -251,7 +255,7 @@ public final class MainActivity extends Activity {
     }
     private void positionHeaderRate() {
         headerBrand.invalidate();
-        headerRate.setTranslationX((1f - headerSlide) * dp(100));
+        headerRate.setTranslationX((1f - headerSlide) * dp(110));
         headerRate.setVisibility(headerSlide == 0 ? View.INVISIBLE : View.VISIBLE);
         headerBrand.setContentDescription(headerSlide >= .5f
             ? "Tap to show the XBT logo." : "XBT. Tap to show the fiat exchange rate.");
