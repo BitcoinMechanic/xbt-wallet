@@ -543,12 +543,10 @@ public final class MainActivity extends Activity {
         LinearLayout balanceRow = new LinearLayout(this);
         balanceRow.setGravity(Gravity.CENTER_VERTICAL);
         chain.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        if (index == 0) {
-            chain.setTextSize(16.5f);
-            chain.setMinHeight(dp(62.4f)); chain.setMinimumHeight(dp(62.4f));
-            chain.setPadding(dp(16.8f), dp(14.4f), dp(16.8f), dp(14.4f));
-        }
-        balanceRow.addView(chain, new LinearLayout.LayoutParams(0, -2, index == 0 ? 1.2f : 1f));
+        chain.setTextSize(16.5f);
+        chain.setMinHeight(dp(62.4f)); chain.setMinimumHeight(dp(62.4f));
+        chain.setPadding(dp(16.8f), dp(14.4f), dp(16.8f), dp(14.4f));
+        balanceRow.addView(chain, new LinearLayout.LayoutParams(0, -2, 1.2f));
         Button amount = new Button(this); styleButton(amount, false);
         amount.setBackground(null);
         amount.setTextColor(0xffa8efd5); amount.setTextSize(17); amount.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
@@ -559,7 +557,7 @@ public final class MainActivity extends Activity {
             prefs.edit().putInt("display-unit", unit).apply();
             updateBalanceAmounts();
         });
-        LinearLayout.LayoutParams amountSize = new LinearLayout.LayoutParams(0, -2, index == 0 ? .8f : 1f); amountSize.leftMargin = dp(8);
+        LinearLayout.LayoutParams amountSize = new LinearLayout.LayoutParams(0, -2, .8f); amountSize.leftMargin = dp(8);
         balanceRow.addView(amount, amountSize);
         LinearLayout.LayoutParams rowSize = new LinearLayout.LayoutParams(-1, -2); rowSize.topMargin = dp(8); rowSize.bottomMargin = dp(8);
         page.addView(balanceRow, rowSize);
