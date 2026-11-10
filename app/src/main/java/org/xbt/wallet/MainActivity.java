@@ -269,15 +269,17 @@ public final class MainActivity extends Activity {
         return tx.getLabel();
     }
     private void labelReceivedTransactions(LightningOuterClass.TransactionDetails transactions) {
-        String address = prefs.getString("receive-label-address", "");
-        String label = prefs.getString("receive-label", "");
-        if (address.isEmpty() || label.isEmpty()) return;
+        Map<String, String> labels = ReceiveAddresses.labels(prefs);
+        if (labels.isEmpty()) return;
+        String legacyAddress = prefs.getString("receive-label-address", "");
         Set<String> baseline = prefs.getStringSet("receive-label-baseline", Collections.emptySet());
         android.content.SharedPreferences.Editor edit = prefs.edit();
         for (LightningOuterClass.Transaction tx : transactions.getTransactionsList()) {
-            if (baseline.contains(tx.getTxHash()) || tx.getNumConfirmations() < 0 || tx.getAmount() <= 0) continue;
+            if (tx.getNumConfirmations() < 0 || tx.getAmount() <= 0) continue;
             for (LightningOuterClass.OutputDetail output : tx.getOutputDetailsList()) {
-                if (!output.getIsOurAddress() || output.getAmount() <= 0 || !address.equals(output.getAddress())) continue;
+                if (!output.getIsOurAddress() || output.getAmount() <= 0) continue;
+                String label = labels.get(output.getAddress());
+                if (label == null || (legacyAddress.equals(output.getAddress()) && baseline.contains(tx.getTxHash()))) continue;
                 String txKey = "tx-label-" + tx.getTxHash();
                 String coinKey = "utxo-label-" + tx.getTxHash() + ":" + output.getOutputIndex();
                 if (!prefs.contains(txKey)) edit.putString(txKey, label);
@@ -351,7 +353,7 @@ public final class MainActivity extends Activity {
                     button("Refresh", this::home);
                 }); return;
             }
-            if (!prefs.getString("receive-label", "").isEmpty()) labelReceivedTransactions(
+            if (!ReceiveAddresses.labels(prefs).isEmpty()) labelReceivedTransactions(
                 LightningOuterClass.TransactionDetails.parseFrom(node.rpc("getTransactions", LightningOuterClass.GetTransactionsRequest.getDefaultInstance())));
             LightningOuterClass.GetInfoResponse info = LightningOuterClass.GetInfoResponse.parseFrom(node.rpc("getInfo", LightningOuterClass.GetInfoRequest.getDefaultInstance()));
             LightningOuterClass.WalletBalanceResponse balance = LightningOuterClass.WalletBalanceResponse.parseFrom(node.rpc("walletBalance", LightningOuterClass.WalletBalanceRequest.getDefaultInstance()));
@@ -1179,12 +1181,9 @@ public final class MainActivity extends Activity {
     }
     private void deposit() {
         work(() -> {
-            String saved = prefs.getString("deposit", "");
-            if (saved.isEmpty()) {
-                saved = LightningOuterClass.NewAddressResponse.parseFrom(node.rpc("newAddress", LightningOuterClass.NewAddressRequest.newBuilder().setType(LightningOuterClass.AddressType.WITNESS_PUBKEY_HASH).build())).getAddress();
-                if (!prefs.edit().putString("deposit", saved).commit()) throw new Exception("Could not save address");
-            }
-            final String address = saved;
+            final String address = ReceiveAddresses.fresh(prefs, () ->
+                LightningOuterClass.NewAddressResponse.parseFrom(node.rpc("newAddress",
+                    LightningOuterClass.NewAddressRequest.newBuilder().setType(LightningOuterClass.AddressType.WITNESS_PUBKEY_HASH).build())).getAddress());
             LightningOuterClass.TransactionDetails previous = LightningOuterClass.TransactionDetails.parseFrom(
                 node.rpc("getTransactions", LightningOuterClass.GetTransactionsRequest.getDefaultInstance()));
             labelReceivedTransactions(previous);
@@ -1206,13 +1205,12 @@ public final class MainActivity extends Activity {
                     getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("XBT address", address));
                     Toast.makeText(this, "Address copied", Toast.LENGTH_SHORT).show();
                 });
-                EditText receiveLabel = labelField(prefs.getString("receive-label", ""));
+                EditText receiveLabel = labelField("");
                 setFieldHint(receiveLabel, "Label (optional)");
-                prefs.edit().putString("receive-label-address", address).putStringSet("receive-label-baseline", baseline).apply();
                 receiveLabel.addTextChangedListener(new android.text.TextWatcher() {
                     public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
                     public void onTextChanged(CharSequence s, int start, int before, int count) {
-                        prefs.edit().putString("receive-label", s.toString().trim()).apply();
+                        prefs.edit().putString(ReceiveAddresses.LABEL_PREFIX + address, s.toString().trim()).apply();
                     }
                     public void afterTextChanged(android.text.Editable s) {}
                 });
