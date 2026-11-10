@@ -90,6 +90,7 @@ public final class MainActivity extends Activity {
     private AmountEntry activeAmountEntry;
     private ByteString receivingInvoiceHash;
     private EditText scanTarget;
+    private boolean scanPayment;
     private String receivingAddress;
     private Set<String> receiveBaseline = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -387,6 +388,7 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.PendingChannelsResponse.ForceClosedChannel c : pending.getPendingForceClosingChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 for (LightningOuterClass.PendingChannelsResponse.WaitingCloseChannel c : pending.getWaitingCloseChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 if (hasPublic) text("Required on-chain reserve: " + displayAmount(balance.getReservedBalanceAnchorChan()));
+                homeScanButton();
             });
         });
     }
@@ -397,6 +399,28 @@ public final class MainActivity extends Activity {
         bar.setProgressTintList(android.content.res.ColorStateList.valueOf(0xffa8efd5));
         page.addView(bar, new LinearLayout.LayoutParams(-1, dp(8)));
         text(String.format(Locale.getDefault(), "%,d / %,d", height, target));
+    }
+    private void homeScanButton() {
+        LinearLayout homePage = page;
+        View spacer = new View(this);
+        homePage.addView(spacer, new LinearLayout.LayoutParams(1, 0));
+        Button scan = button("Scan", () -> {
+            scanTarget = null;
+            scanPayment = true;
+            launchScanner("Scan a Lightning invoice or Bitcoin address");
+        });
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(160), dp(56));
+        size.gravity = Gravity.CENTER_HORIZONTAL;
+        scan.setLayoutParams(size);
+        homePage.addOnLayoutChangeListener((v, l, t, r, b, oldL, oldT, oldR, oldB) -> {
+            View viewport = (View) homePage.getParent();
+            int height = viewport.getHeight() - viewport.getPaddingTop() - viewport.getPaddingBottom();
+            int gap = Math.max(dp(24), Math.round(height * 2f / 3f) - spacer.getTop() - scan.getHeight() / 2);
+            if (spacer.getLayoutParams().height != gap) {
+                spacer.getLayoutParams().height = gap;
+                spacer.requestLayout();
+            }
+        });
     }
     private void homeBalances(long onChain, long channelFunds) {
         balanceSats[0] = onChain; balanceSats[1] = channelFunds;
@@ -1379,12 +1403,13 @@ public final class MainActivity extends Activity {
         return new FundingPreview(selected, total, budget, rate, wallet.getReservedBalanceAnchorChan(), publish, weight, chosen.size());
     }
     private static byte[] hex(String value) { byte[] b = new byte[value.length()/2]; for (int i=0;i<b.length;i++) b[i]=(byte) Integer.parseInt(value.substring(i*2,i*2+2),16); return b; }
-    private void sendOnChain() {
+    private void sendOnChain() { sendOnChain(""); }
+    private void sendOnChain(String scanned) {
         work(() -> {
             LightningOuterClass.ListUnspentResponse available = LightningOuterClass.ListUnspentResponse.parseFrom(node.rpc("listUnspent",
                 LightningOuterClass.ListUnspentRequest.newBuilder().setMinConfs(1).setMaxConfs(Integer.MAX_VALUE).build()));
             LightningOuterClass.WalletBalanceResponse wallet = LightningOuterClass.WalletBalanceResponse.parseFrom(node.rpc("walletBalance", LightningOuterClass.WalletBalanceRequest.getDefaultInstance()));
-            runOnUiThread(() -> onChainForm(available, wallet));
+            runOnUiThread(() -> onChainForm(available, wallet, scanned));
         });
     }
     private OnChainPayment onChainPreview(List<LightningOuterClass.Utxo> selected,
@@ -1411,7 +1436,7 @@ public final class MainActivity extends Activity {
             + "\nTotal including fee: " + displayAmount(plan.total)
             + (plan.reserve > 0 ? "\nReserve retained: " + displayAmount(plan.reserve) : "");
     }
-    private void onChainForm(LightningOuterClass.ListUnspentResponse available, LightningOuterClass.WalletBalanceResponse wallet) {
+    private void onChainForm(LightningOuterClass.ListUnspentResponse available, LightningOuterClass.WalletBalanceResponse wallet, String scanned) {
         page("Send on chain");
         List<LightningOuterClass.Utxo> selected = new ArrayList<>();
         Map<CheckBox, LightningOuterClass.Utxo> boxes = new LinkedHashMap<>();
@@ -1544,6 +1569,7 @@ public final class MainActivity extends Activity {
             } catch (Exception e) { error(e); }
         });
         button("Home", this::home);
+        if (!scanned.isEmpty()) address.setText(scanned);
         update.run();
     }
     private OnChainPayment freshOnChainPreview(List<LightningOuterClass.Utxo> chosen, String address, long amount, long rate, boolean max) throws Exception {
@@ -1750,7 +1776,8 @@ public final class MainActivity extends Activity {
             });
         });
     }
-    private void payment() {
+    private void payment() { payment(""); }
+    private void payment(String scanned) {
         page("Pay Lightning"); text("XBT invoices only. Review the recipient and amount before paying.");
         text("Invoice");
         EditText invoice = field("ln...", "");
@@ -1854,16 +1881,43 @@ public final class MainActivity extends Activity {
                     })).show());
             });
         }); button("Home", this::home);
+        if (!scanned.isEmpty()) invoice.setText(scanned);
     }
     private void scan(EditText target) {
         scanTarget = target;
+        scanPayment = false;
+        launchScanner("Scan XBT connection or invoice");
+    }
+    private void launchScanner(String prompt) {
         new com.google.zxing.integration.android.IntentIntegrator(this).setDesiredBarcodeFormats(com.google.zxing.integration.android.IntentIntegrator.QR_CODE)
-            .setPrompt("Scan XBT connection or invoice").setBeepEnabled(false).initiateScan();
+            .setPrompt(prompt).setBeepEnabled(false).initiateScan();
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         com.google.zxing.integration.android.IntentResult scan = com.google.zxing.integration.android.IntentIntegrator.parseActivityResult(request, result, data);
-        if (scan != null && scan.getContents() != null && scanTarget != null) scanTarget.setText(scan.getContents());
+        if (scan == null) return;
+        boolean routePayment = scanPayment;
+        EditText target = scanTarget;
+        scanPayment = false;
+        scanTarget = null;
+        if (scan.getContents() == null) return;
+        String contents = scan.getContents().trim();
+        if (!routePayment) {
+            if (target != null) target.setText(contents);
+            return;
+        }
+        try {
+            String invoice = contents.replaceFirst("(?i)^lightning:", "");
+            if (invoice.toLowerCase(Locale.ROOT).matches("ln(bc|tb|bcrt)[0-9a-z]+")) {
+                payment(invoice);
+            } else {
+                OnChainPayment.Request payment = OnChainPayment.parse(contents);
+                OnChainPayment.outputWeight(payment.address);
+                sendOnChain(contents);
+            }
+        } catch (Exception e) {
+            error(new Exception("This QR code is not a supported Lightning invoice or Bitcoin payment address. " + e.getMessage()));
+        }
     }
     @Override protected void onDestroy() { handler.removeCallbacksAndMessages(null); if (bound) unbindService(connection); super.onDestroy(); }
 }
