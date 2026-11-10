@@ -49,7 +49,11 @@ public final class MainActivity extends Activity {
             if (node != null && !busy && (screen.equals("Home") || screen.equals("Wallet is starting"))) home();
             if (node != null && !busy && screen.equals("Receive XBT")) checkDeposit();
             if (node != null && !busy && screen.equals("Lightning invoice")) checkLightningReceipt();
-            if (node != null && !busy && screen.equals("Swap invoice") && viewingSwapHash != null && !prefs.getString("swap-receive-"+viewingSwapHash, "").contains("last_error")) refreshSwapReceive(viewingSwapHash, false);
+            if (node != null && !busy && screen.equals("Swap invoice") && viewingSwapHash != null) {
+                try {
+                    if (SwapReceive.needsRefresh(new org.json.JSONObject(prefs.getString("swap-receive-"+viewingSwapHash, "{}")))) refreshSwapReceive(viewingSwapHash, false);
+                } catch (org.json.JSONException ignored) { /* Keep malformed saved records for explicit inspection. */ }
+            }
             handler.postDelayed(this, 5000);
         }
     };

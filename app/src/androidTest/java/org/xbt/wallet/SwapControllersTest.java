@@ -29,6 +29,20 @@ public class SwapControllersTest {
     }
     @Test public void onionUsesUnresolvedSocksAndParsesChunkedJson() throws Exception { onionTransport(false); }
     @Test public void receivePostUsesTorWithExactPrivateBody() throws Exception { onionTransport(true); }
+    @Test public void unavailableSocksProxyReportsNoRequestSent() throws Exception {
+        int port;
+        try (ServerSocket listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) { port=listener.getLocalPort(); }
+        try {
+            SwapControllers.onionRequest(new URI("http://"+"a".repeat(56)+".onion/v1/receive"),
+                new Proxy(Proxy.Type.SOCKS,new InetSocketAddress(InetAddress.getLoopbackAddress(),port)),
+                new JSONObject().put("action","status"),"a".repeat(64));
+            fail("Closed SOCKS listener accepted a request");
+        } catch(IOException expected) {
+            assertTrue(expected.getMessage(),expected.getMessage().contains("request was not sent"));
+            assertTrue(expected.getMessage().contains("Stage: connect"));
+            assertFalse(expected.getMessage().contains("a".repeat(64)));
+        }
+    }
     private void onionTransport(boolean post) throws Exception {
         String host = "a".repeat(56)+".onion";
         try (ServerSocket listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {

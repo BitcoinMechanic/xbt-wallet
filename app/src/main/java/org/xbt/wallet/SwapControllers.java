@@ -64,6 +64,9 @@ final class SwapControllers {
         if (response.has("error")) {
             String code = response.getString("error");
             String message = switch (code) {
+                case "grant_closed" -> "The node grant expired, was paused, or was replaced. Wait for the controller to refresh its node pairing, then check this request.";
+                case "channel_requires_recovery", "previous_enrollment_requires_recovery" -> "The coordinator must resolve an earlier channel or swap before accepting this request.";
+                case "route_outside_approved_channels", "approved_channel_changed" -> "The route uses a channel outside the current node grant. The controller operator must refresh its approved channels.";
                 case "wallet_receive_not_found" -> "The controller has not recorded this request. Use Retry request to resume with the same invoice.";
                 case "service_previous_swap_active" -> "This controller is still handling another BTC-to-XBT swap. Wait for it to finish.";
                 case "service_pairing_required" -> "The controller has not paired its Lightning nodes.";
@@ -130,6 +133,7 @@ final class SwapControllers {
     static byte[] onionRequest(URI uri, Proxy proxy, JSONObject payload, String token) throws Exception {
         if (!ControllerAddress.onion(ControllerAddress.origin("http://" + uri.getRawAuthority())) || proxy.type() != Proxy.Type.SOCKS)
             throw new Exception("Onion transport requires Tor.");
+        String stage = "connect";
         try (Socket socket = new Socket(proxy)) {
             socket.connect(InetSocketAddress.createUnresolved(uri.getHost(), uri.getPort() < 0 ? 80 : uri.getPort()), 30000);
             socket.setSoTimeout(30000);
@@ -138,8 +142,10 @@ final class SwapControllers {
             String request = (payload == null ? "GET " : "POST ") + uri.getRawPath() + " HTTP/1.1\r\nHost: " + uri.getRawAuthority()
                 + "\r\nAccept: application/json\r\nUser-Agent: XBTWallet/0.1\r\nConnection: close\r\n"
                 + (payload == null ? "" : "Authorization: Bearer " + token + "\r\nContent-Type: application/json\r\nContent-Length: " + bytes.length + "\r\n") + "\r\n";
+            stage = "write_request";
             socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
             socket.getOutputStream().write(bytes); socket.getOutputStream().flush();
+            stage = "read_response";
             byte[] all = bounded(socket.getInputStream(), LIMIT + 8192);
             String raw = new String(all, StandardCharsets.ISO_8859_1); int split = raw.indexOf("\r\n\r\n");
             if (split < 0 || split > 8192) throw new Exception("Invalid controller HTTP response.");
@@ -172,6 +178,16 @@ final class SwapControllers {
             } else if (fields.containsKey("content-length") && Long.parseLong(fields.get("content-length")) != body.length) throw new Exception("Incomplete controller response.");
             if (body.length > LIMIT) throw new Exception("Controller response is too large.");
             return body;
+        } catch (SocketTimeoutException e) {
+            throw new IOException((stage.equals("connect")
+                ? "Tor connection to the controller timed out before this request was sent. Check status before retrying the saved request."
+                : "The controller did not finish replying over Tor. It may have accepted the request. Check status before retrying; do not repeat a payment.")
+                + "\nCode: controller_timeout\nStage: " + stage, e);
+        } catch (SocketException e) {
+            throw new IOException((stage.equals("connect")
+                ? "Could not connect to the controller through Tor. This request was not sent. Check the controller connection and retry the saved request."
+                : "The Tor connection failed while exchanging the request. The controller may have accepted it. Check status before retrying; do not repeat a payment.")
+                + "\nCode: controller_connection_failed\nStage: " + stage, e);
         }
     }
 }

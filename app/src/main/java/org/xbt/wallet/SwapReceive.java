@@ -5,6 +5,11 @@ import lnrpc.LightningOuterClass;
 
 /** Validate the displayed BTC invoice against the wallet's own XBT receive invoice. */
 final class SwapReceive {
+    static boolean needsRefresh(JSONObject record) {
+        JSONObject reply = record.optJSONObject("reply");
+        return record.has("hash") && !record.has("last_error") && !record.optBoolean("received")
+            && !record.optBoolean("dismissed") && (reply == null || !reply.optBoolean("terminal"));
+    }
     static String hash(byte[] bytes) {
         StringBuilder out = new StringBuilder(); for (byte b : bytes) out.append(String.format(java.util.Locale.ROOT,"%02x", b & 255)); return out.toString();
     }
