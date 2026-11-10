@@ -1687,6 +1687,8 @@ public final class MainActivity extends Activity {
         text("Invoice");
         EditText invoice = field("ln...", "");
         invoice.setShowSoftInputOnFocus(false);
+        invoice.setFocusable(false);
+        invoice.setCursorVisible(false);
         invoice.setContentDescription("Invoice. Tap to scan a QR code or paste from clipboard.");
         invoice.setOnClickListener(v -> {
             LinearLayout choices = new LinearLayout(this);
