@@ -31,6 +31,20 @@ public class OnChainPaymentTest {
         assertEquals(305, plan.fee);
         assertEquals(50305, plan.total);
     }
+    @Test public void manualPreviewWorksBeforeAddressAndRefinesAfterward() {
+        OnChainPayment preliminary = new OnChainPayment(100000,100000,0,273,1,
+            OnChainPayment.previewOutputWeight(""),50000,2,false);
+        assertEquals(50000, preliminary.amount);
+        assertEquals(329, preliminary.fee);
+        assertEquals(50329, preliminary.total);
+        OnChainPayment addressed = new OnChainPayment(100000,100000,0,273,1,
+            OnChainPayment.previewOutputWeight(ADDRESS),50000,2,false);
+        assertEquals(preliminary.amount, addressed.amount);
+        assertEquals(305, addressed.fee);
+    }
+    @Test(expected=IllegalArgumentException.class) public void invalidAddressIsNotTreatedAsMissing() {
+        OnChainPayment.previewOutputWeight("invalid");
+    }
     @Test public void maxDeductsFeeAndConsumesSelection() {
         OnChainPayment plan = new OnChainPayment(100000,200000,0,273,1,124,0,2,true);
         assertEquals(219, plan.fee);

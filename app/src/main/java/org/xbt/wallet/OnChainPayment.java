@@ -47,6 +47,10 @@ final class OnChainPayment {
         try { return URLDecoder.decode(value, "UTF-8"); }
         catch (java.io.UnsupportedEncodingException impossible) { throw new AssertionError(impossible); }
     }
+    static int previewOutputWeight(String address) {
+        // Conservative recipient size until its address is supplied, for both fixed and max amounts.
+        return address.trim().isEmpty() ? 172 : outputWeight(address);
+    }
     static int outputWeight(String address) {
         String lower = address.toLowerCase(java.util.Locale.ROOT);
         if (lower.startsWith("bcrt1q") && lower.length() == 44) return 124;

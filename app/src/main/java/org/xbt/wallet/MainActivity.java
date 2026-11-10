@@ -1390,7 +1390,7 @@ public final class MainActivity extends Activity {
             else throw new Exception("Cannot estimate fees for this output type.");
         }
         return new OnChainPayment(total, wallet.getTotalBalance(), wallet.getReservedBalanceAnchorChan(), weight,
-            selected.size(), max && address.trim().isEmpty() ? 172 : OnChainPayment.outputWeight(address), amount, rate, max);
+            selected.size(), OnChainPayment.previewOutputWeight(address), amount, rate, max);
     }
     private String paymentSummary(OnChainPayment plan) {
         return "Recipient receives: " + displayAmount(plan.amount) + "\nEstimated network fee: " + displayAmount(plan.fee)
