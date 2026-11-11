@@ -54,6 +54,7 @@ public final class MainActivity extends Activity {
             dialog.setOnShowListener(ignored -> {
                 Window window = dialog.getWindow();
                 if (window == null) return;
+                styleWalletDialog(dialog);
                 ViewGroup content = window.findViewById(android.R.id.content);
                 if (content == null || content.getChildCount() != 1) return;
                 View body = content.getChildAt(0);
@@ -69,6 +70,50 @@ public final class MainActivity extends Activity {
                 content.addView(wrapper, size);
             });
             return dialog;
+        }
+    }
+    private void styleWalletDialog(AlertDialog dialog) {
+        dialog.getWindow().setBackgroundDrawable(surface(0xff101517, 18, 0xff304037));
+        TextView message = dialog.findViewById(android.R.id.message);
+        if (message != null) {
+            message.setTextColor(0xffafbeb6); message.setTextSize(15); message.setLineSpacing(dp(3), 1f);
+        }
+        int titleId = getResources().getIdentifier("alertTitle", "id", "android");
+        TextView title = titleId == 0 ? null : dialog.findViewById(titleId);
+        if (title != null) {
+            title.setTextColor(0xffeef5f0); title.setTextSize(20);
+            title.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        }
+        // Replace the platform button bar with the same equally sized actions as custom forms.
+        List<Button> buttons = new ArrayList<>();
+        for (int which : new int[]{AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_NEUTRAL, AlertDialog.BUTTON_POSITIVE}) {
+            Button button = dialog.getButton(which);
+            if (button != null && button.getVisibility() == View.VISIBLE) {
+                styleButton(button, which == AlertDialog.BUTTON_POSITIVE); buttons.add(button);
+            }
+        }
+        if (!buttons.isEmpty()) {
+            ViewGroup parent = (ViewGroup) buttons.get(0).getParent();
+            if (parent != null) {
+                parent.removeAllViews();
+                LinearLayout row = new LinearLayout(this); row.setBaselineAligned(false);
+                row.setPadding(dp(16), dp(8), dp(16), dp(16));
+                for (int i = 0; i < buttons.size(); i++) {
+                    LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(0, -2, 1);
+                    if (i > 0) size.leftMargin = dp(5);
+                    if (i + 1 < buttons.size()) size.rightMargin = dp(5);
+                    row.addView(buttons.get(i), size);
+                }
+                parent.setPadding(0, 0, 0, 0);
+                parent.addView(row, new ViewGroup.LayoutParams(-1, -2));
+            }
+        }
+        ListView list = dialog.getListView();
+        if (list != null) {
+            list.setBackgroundColor(0xff101517);
+            list.setDivider(new android.graphics.drawable.ColorDrawable(0xff304037));
+            list.setDividerHeight(dp(1));
+            list.setPadding(dp(8), 0, dp(8), dp(8));
         }
     }
     private LinearLayout page;
@@ -1047,9 +1092,11 @@ public final class MainActivity extends Activity {
         });
     }
     private void labelCoin(LightningOuterClass.Utxo coin) {
-        EditText input = new EditText(this); input.setSingleLine(true); input.setHint("Label"); input.setText(coinLabel(coin));
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(8), dp(20), dp(8));
+        EditText input = field(form, "Optional", coinLabel(coin));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
-        new WalletDialogBuilder().setTitle("Label UTXO").setMessage(outpoint(coin)).setView(input)
+        new WalletDialogBuilder().setTitle("Label on-chain funds").setMessage(outpoint(coin)).setView(form)
             .setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> {
                 String label = input.getText().toString().trim();
                 if (!prefs.edit().putString("utxo-label-" + outpoint(coin), label).commit()) { error(new Exception("Could not save label.")); return; }
@@ -1582,10 +1629,11 @@ public final class MainActivity extends Activity {
         }
     }
     private void editHistoryLabel(HistoryEntry entry, Runnable refresh) {
-        EditText input = new EditText(this); input.setSingleLine(true); setFieldHint(input, "Label Optional");
-        input.setText(prefs.getString(entry.labelKey, entry.fallbackLabel));
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(8), dp(20), dp(8));
+        EditText input = field(form, "Optional", prefs.getString(entry.labelKey, entry.fallbackLabel));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
-        new WalletDialogBuilder().setTitle("Edit payment label").setView(input)
+        new WalletDialogBuilder().setTitle("Edit payment label").setView(form)
             .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
                 // Persist empty overrides too, so clearing a label cannot resurrect a backend label.
                 if (!prefs.edit().putString(entry.labelKey, input.getText().toString().trim()).commit()) {
