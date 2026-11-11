@@ -84,6 +84,9 @@ public final class MainActivity extends Activity {
     private String screen = "";
     private int historyTab;
     private boolean channelDetailsFromHome;
+    private final Set<String> expandedHomeChannels = new HashSet<>();
+    private final Map<String, android.animation.ValueAnimator> channelExpansions = new HashMap<>();
+    private final List<TextView> homeChannelBalances = new ArrayList<>();
     private final boolean[] homeActionsExpanded = new boolean[2];
     private final LinearLayout[] homeActionsViews = new LinearLayout[2];
     private final android.animation.ValueAnimator[] homeActionsAnimation = new android.animation.ValueAnimator[2];
@@ -140,6 +143,8 @@ public final class MainActivity extends Activity {
     }
     private void page(String title, boolean sensitive) {
         activeAmountEntry = null;
+        for (android.animation.ValueAnimator animation : new ArrayList<>(channelExpansions.values())) animation.cancel();
+        channelExpansions.clear(); homeChannelBalances.clear();
         // Allow remote UI testing only in debug builds on the valueless test chain.
         boolean mirrorable = (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
                 && prefs.getString("network", "regtest").equals("regtest") && !sensitive;
@@ -478,7 +483,7 @@ public final class MainActivity extends Activity {
                     throw new Exception("Could not save channel history.");
             }
             runOnUiThread(() -> {
-                if (!screen.equals(origin) || walletPopup != null || (headerSlideAnimation != null && headerSlideAnimation.isRunning()) || ((homeActionsAnimation[0] != null && homeActionsAnimation[0].isRunning()) || (homeActionsAnimation[1] != null && homeActionsAnimation[1].isRunning()))) return;
+                if (!screen.equals(origin) || walletPopup != null || !channelExpansions.isEmpty() || (headerSlideAnimation != null && headerSlideAnimation.isRunning()) || ((homeActionsAnimation[0] != null && homeActionsAnimation[0].isRunning()) || (homeActionsAnimation[1] != null && homeActionsAnimation[1].isRunning()))) return;
                 page("Home");
                 long channelFunds = 0;
                 for (LightningOuterClass.Channel channel : active.getChannelsList())
@@ -519,17 +524,17 @@ public final class MainActivity extends Activity {
             boolean connected = channel.getActive();
             boolean connecting = !connected && connectedPeers.contains(channel.getRemotePubkey());
             homeChannelRow(channel.getChannelPoint(), number++, connected ? "Connected" : connecting ? "Connecting" : "Offline",
-                connected ? 0xff65d89a : connecting ? 0xffffb454 : 0xffed6b73, () -> channelDetails(channel));
+                connected ? 0xff65d89a : connecting ? 0xffffb454 : 0xffed6b73, channel.getLocalBalance(), channel.getRemoteBalance(), () -> channelDetails(channel));
         }
         for (LightningOuterClass.PendingChannelsResponse.PendingOpenChannel pendingChannel : pending.getPendingOpenChannelsList()) {
             LightningOuterClass.PendingChannelsResponse.PendingChannel channel = pendingChannel.getChannel();
             boolean connecting = connectedPeers.contains(channel.getRemoteNodePub());
             homeChannelRow(channel.getChannelPoint(), number++, connecting ? "Connecting · awaiting channel confirmation" : "Offline · channel opening",
-                connecting ? 0xffffb454 : 0xffed6b73,
+                connecting ? 0xffffb454 : 0xffed6b73, channel.getLocalBalance(), channel.getRemoteBalance(),
                 () -> pendingChannelDetails(channel, "Pending opening · " + pendingChannel.getConfirmationsUntilActive() + " confirmations until active"));
         }
     }
-    private void homeChannelRow(String point, int number, String status, int color, Runnable details) {
+    private void homeChannelRow(String point, int number, String status, int color, long local, long remote, Runnable details) {
         String label = prefs.getString("channel-label-" + point, "");
         if (label.isEmpty()) label = "Channel " + number;
         LinearLayout row = new LinearLayout(this);
@@ -554,9 +559,71 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams lightSize = new LinearLayout.LayoutParams(dp(12), dp(12));
         lightSize.leftMargin = dp(12); lightSize.rightMargin = dp(12);
         row.addView(light, lightSize);
-        row.setContentDescription(label + ". " + status + ". Tap for channel details.");
-        row.setFocusable(true); row.setOnClickListener(v -> details.run());
-        page.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout card = new LinearLayout(this); card.setOrientation(LinearLayout.VERTICAL);
+        card.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        View liquidity = new View(this) {
+            private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            @Override protected void onDraw(android.graphics.Canvas canvas) {
+                super.onDraw(canvas);
+                float fraction = local + (double) remote <= 0 ? 0 : (float) (local / (local + (double) remote));
+                android.graphics.Path outline = new android.graphics.Path();
+                outline.addRoundRect(0, 0, getWidth(), getHeight(), getHeight() / 2f, getHeight() / 2f, android.graphics.Path.Direction.CW);
+                int saved = canvas.save(); canvas.clipPath(outline);
+                paint.setColor(0xffb59b72); canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+                paint.setColor(0xff80d8b2); canvas.drawRect(0, 0, getWidth() * fraction, getHeight(), paint);
+                canvas.restoreToCount(saved);
+            }
+        };
+        LinearLayout.LayoutParams barSize = new LinearLayout.LayoutParams(-1, dp(10));
+        barSize.leftMargin = dp(4); barSize.rightMargin = dp(12); barSize.bottomMargin = dp(8);
+        card.addView(liquidity, barSize);
+        LinearLayout expanded = new LinearLayout(this); expanded.setOrientation(LinearLayout.VERTICAL);
+        expanded.setPadding(dp(4), dp(4), dp(12), dp(12));
+        TextView balances = new TextView(this);
+        balances.setText(channelBalances(local, remote)); balances.setTextSize(14); balances.setTextColor(0xffafbeb6);
+        balances.setTag(new long[]{local, remote}); homeChannelBalances.add(balances);
+        expanded.addView(balances);
+        TextView more = new TextView(this); more.setText("Channel details"); more.setTextSize(14); more.setTextColor(0xffa8efd5);
+        more.setPadding(0, dp(10), 0, dp(10)); more.setOnClickListener(v -> details.run());
+        expanded.addView(more);
+        card.addView(expanded, new LinearLayout.LayoutParams(-1, -2));
+        expanded.setVisibility(expandedHomeChannels.contains(point) ? View.VISIBLE : View.GONE);
+        expanded.setAlpha(expandedHomeChannels.contains(point) ? 1f : 0f);
+        card.setContentDescription(label + ". " + status + ". Local liquidity on the left, remote on the right. Tap to show or hide balances.");
+        card.setFocusable(true); card.setOnClickListener(v -> {
+            boolean show = !expandedHomeChannels.contains(point);
+            android.animation.ValueAnimator prior = channelExpansions.remove(point);
+            if (prior != null) prior.cancel();
+            if (show) expandedHomeChannels.add(point); else expandedHomeChannels.remove(point);
+            int start = expanded.getVisibility() == View.GONE ? 0 : expanded.getHeight();
+            float alpha = expanded.getAlpha();
+            expanded.setVisibility(View.VISIBLE);
+            expanded.measure(View.MeasureSpec.makeMeasureSpec(card.getWidth(), View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            int end = show ? expanded.getMeasuredHeight() : 0;
+            android.animation.ValueAnimator animation = android.animation.ValueAnimator.ofFloat(0, 1);
+            animation.setDuration(260);
+            animation.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+            animation.addUpdateListener(frame -> {
+                float progress = (float) frame.getAnimatedValue();
+                expanded.getLayoutParams().height = Math.round(start + (end - start) * progress);
+                expanded.setAlpha(alpha + ((show ? 1f : 0f) - alpha) * progress);
+                expanded.requestLayout();
+            });
+            animation.addListener(new android.animation.AnimatorListenerAdapter() {
+                private boolean cancelled;
+                @Override public void onAnimationCancel(android.animation.Animator a) { cancelled = true; }
+                @Override public void onAnimationEnd(android.animation.Animator a) {
+                    if (channelExpansions.get(point) == animation) channelExpansions.remove(point);
+                    if (cancelled) return;
+                    expanded.setVisibility(show ? View.VISIBLE : View.GONE);
+                    expanded.getLayoutParams().height = LinearLayout.LayoutParams.WRAP_CONTENT;
+                    expanded.requestLayout();
+                }
+            });
+            channelExpansions.put(point, animation); animation.start();
+        });
+        page.addView(card, new LinearLayout.LayoutParams(-1, -2));
     }
     private void homeScanButton() {
         LinearLayout homePage = page;
@@ -632,6 +699,10 @@ public final class MainActivity extends Activity {
         actions.setAlpha(homeActionsExpanded[index] ? 1f : 0f);
     }
     private void updateBalanceAmounts() {
+        for (TextView balances : homeChannelBalances) {
+            long[] values = (long[]) balances.getTag();
+            balances.setText(channelBalances(values[0], values[1]));
+        }
         String code = prefs.getString("fiat-currency", "USD");
         java.math.BigDecimal price = null;
         try {
@@ -910,7 +981,7 @@ public final class MainActivity extends Activity {
         text("Peer\n" + channel.getRemoteNodePub());
         text("Funding output\n" + channel.getChannelPoint());
         button(label.isEmpty() ? "Add label" : "Edit label", () -> labelChannel(channel.getChannelPoint(), () -> pendingChannelDetails(channel, status)));
-        button(channelDetailsFromHome ? "Back to Home" : "Back to channels",
+        button(channelDetailsFromHome ? "Home" : "Back to channels",
             channelDetailsFromHome ? this::home : this::channelList);
     }
     private String channelLabelPrefix(String point) {
@@ -958,7 +1029,7 @@ public final class MainActivity extends Activity {
         });
         close.setEnabled(channel.getActive() && closing.isEmpty());
         if (!channel.getActive()) text("Reconnect to the peer before closing cooperatively.");
-        button(channelDetailsFromHome ? "Back to Home" : "Back to channels",
+        button(channelDetailsFromHome ? "Home" : "Back to channels",
             channelDetailsFromHome ? this::home : this::channelList);
     }
     private void closeChannel(LightningOuterClass.Channel channel, long fee) {
