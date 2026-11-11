@@ -2711,6 +2711,8 @@ public final class MainActivity extends Activity {
             final boolean[] expanded = {false};
             Button toggle = button("Expiration (default 1hr) ▾", () -> {});
             toggle.setBackground(null); toggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            toggle.setTextColor(0xffafbeb6);
+            toggle.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL);
             count = field("Number", prefs.getString("receive-expiration-count", "1"));
             page.removeView(count);
             count.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
