@@ -497,8 +497,8 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.PendingChannelsResponse.ForceClosedChannel c : pending.getPendingForceClosingChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 for (LightningOuterClass.PendingChannelsResponse.WaitingCloseChannel c : pending.getWaitingCloseChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 if (hasPublic) text("Required on-chain reserve: " + displayAmount(balance.getReservedBalanceAnchorChan()));
-                homeChannelStatus(active, pending, connectedPeers);
                 homeScanButton();
+                homeChannelStatus(active, pending, connectedPeers);
                 page.setOnClickListener(v -> {
                     for (int i = 0; i < homeActionsExpanded.length; i++) {
                         if (homeActionsExpanded[i]) animateHomeActions(i, false);
@@ -518,23 +518,36 @@ public final class MainActivity extends Activity {
     private void homeChannelStatus(LightningOuterClass.ListChannelsResponse active,
             LightningOuterClass.PendingChannelsResponse pending, Set<String> connectedPeers) {
         if (active.getChannelsCount() == 0 && pending.getPendingOpenChannelsCount() == 0) return;
-        TextView heading = text("Channels"); heading.setPadding(0, dp(16), 0, dp(4));
+        LinearLayout channels = new LinearLayout(this); channels.setOrientation(LinearLayout.VERTICAL);
+        boolean open = prefs.getBoolean("home-channels-expanded", true);
+        Button heading = button(open ? "Channels ▾" : "Channels ▸", () -> {});
+        heading.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        heading.setOnClickListener(v -> {
+            boolean expand = !prefs.getBoolean("home-channels-expanded", true);
+            prefs.edit().putBoolean("home-channels-expanded", expand).apply();
+            heading.setText(expand ? "Channels ▾" : "Channels ▸");
+            heading.setContentDescription("Channels. " + (expand ? "Expanded" : "Collapsed") + ". Tap to toggle.");
+            animateChannelsSection(channels, expand);
+        });
+        heading.setContentDescription("Channels. " + (open ? "Expanded" : "Collapsed") + ". Tap to toggle.");
+        channels.setVisibility(open ? View.VISIBLE : View.GONE); channels.setAlpha(open ? 1f : 0f);
+        page.addView(channels, new LinearLayout.LayoutParams(-1, -2));
         int number = 1;
         for (LightningOuterClass.Channel channel : active.getChannelsList()) {
             boolean connected = channel.getActive();
             boolean connecting = !connected && connectedPeers.contains(channel.getRemotePubkey());
-            homeChannelRow(channel.getChannelPoint(), number++, connected ? "Connected" : connecting ? "Connecting" : "Offline",
+            homeChannelRow(channels, channel.getChannelPoint(), number++, connected ? "Connected" : connecting ? "Connecting" : "Offline",
                 connected ? 0xff65d89a : connecting ? 0xffffb454 : 0xffed6b73, channel.getLocalBalance(), channel.getRemoteBalance(), () -> channelDetails(channel));
         }
         for (LightningOuterClass.PendingChannelsResponse.PendingOpenChannel pendingChannel : pending.getPendingOpenChannelsList()) {
             LightningOuterClass.PendingChannelsResponse.PendingChannel channel = pendingChannel.getChannel();
             boolean connecting = connectedPeers.contains(channel.getRemoteNodePub());
-            homeChannelRow(channel.getChannelPoint(), number++, connecting ? "Connecting · awaiting channel confirmation" : "Offline · channel opening",
+            homeChannelRow(channels, channel.getChannelPoint(), number++, connecting ? "Connecting · awaiting channel confirmation" : "Offline · channel opening",
                 connecting ? 0xffffb454 : 0xffed6b73, channel.getLocalBalance(), channel.getRemoteBalance(),
                 () -> pendingChannelDetails(channel, "Pending opening · " + pendingChannel.getConfirmationsUntilActive() + " confirmations until active"));
         }
     }
-    private void homeChannelRow(String point, int number, String status, int color, long local, long remote, Runnable details) {
+    private void homeChannelRow(LinearLayout channels, String point, int number, String status, int color, long local, long remote, Runnable details) {
         String label = prefs.getString("channel-label-" + point, "");
         if (label.isEmpty()) label = "Channel " + number;
         LinearLayout row = new LinearLayout(this);
@@ -623,12 +636,41 @@ public final class MainActivity extends Activity {
             });
             channelExpansions.put(point, animation); animation.start();
         });
-        page.addView(card, new LinearLayout.LayoutParams(-1, -2));
+        channels.addView(card, new LinearLayout.LayoutParams(-1, -2));
+    }
+    private void animateChannelsSection(LinearLayout channels, boolean show) {
+        String key = "channels-section";
+        android.animation.ValueAnimator previous = channelExpansions.remove(key);
+        if (previous != null) previous.cancel();
+        int start = channels.getVisibility() == View.GONE ? 0 : channels.getHeight();
+        float alpha = channels.getAlpha();
+        channels.setVisibility(View.VISIBLE);
+        channels.measure(View.MeasureSpec.makeMeasureSpec(page.getWidth() - page.getPaddingLeft() - page.getPaddingRight(), View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int end = show ? channels.getMeasuredHeight() : 0;
+        android.animation.ValueAnimator animation = android.animation.ValueAnimator.ofFloat(0, 1);
+        animation.setDuration(260);
+        animation.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+        animation.addUpdateListener(frame -> {
+            float progress = (float) frame.getAnimatedValue();
+            channels.getLayoutParams().height = Math.round(start + (end - start) * progress);
+            channels.setAlpha(alpha + ((show ? 1f : 0f) - alpha) * progress);
+            channels.requestLayout();
+        });
+        animation.addListener(new android.animation.AnimatorListenerAdapter() {
+            private boolean cancelled;
+            @Override public void onAnimationCancel(android.animation.Animator a) { cancelled = true; }
+            @Override public void onAnimationEnd(android.animation.Animator a) {
+                if (channelExpansions.get(key) == animation) channelExpansions.remove(key);
+                if (cancelled) return;
+                channels.setVisibility(show ? View.VISIBLE : View.GONE);
+                channels.getLayoutParams().height = LinearLayout.LayoutParams.WRAP_CONTENT;
+                channels.requestLayout();
+            }
+        });
+        channelExpansions.put(key, animation); animation.start();
     }
     private void homeScanButton() {
-        LinearLayout homePage = page;
-        View spacer = new View(this);
-        homePage.addView(spacer, new LinearLayout.LayoutParams(1, 0));
         Button scan = button("Scan", () -> {
             scanTarget = null;
             scanPayment = true;
@@ -636,16 +678,8 @@ public final class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(160), dp(56));
         size.gravity = Gravity.CENTER_HORIZONTAL;
+        size.topMargin = dp(24); size.bottomMargin = dp(16);
         scan.setLayoutParams(size);
-        homePage.addOnLayoutChangeListener((v, l, t, r, b, oldL, oldT, oldR, oldB) -> {
-            View viewport = (View) homePage.getParent();
-            int height = viewport.getHeight() - viewport.getPaddingTop() - viewport.getPaddingBottom();
-            int gap = Math.max(dp(24), Math.round(height * (2f / 3f + .10f)) - spacer.getTop() - scan.getHeight() / 2);
-            if (spacer.getLayoutParams().height != gap) {
-                spacer.getLayoutParams().height = gap;
-                spacer.requestLayout();
-            }
-        });
     }
     private void homeBalances(long onChain, long channelFunds) {
         balanceSats[0] = onChain; balanceSats[1] = channelFunds;
