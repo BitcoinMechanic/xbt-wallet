@@ -12,7 +12,7 @@ On a Mac with Xcode (iOS 16 SDK or newer), Go 1.27.3 and Homebrew:
 brew install protobuf xcodegen
 scripts/build-ios-node.sh
 cd ios
-swift ../scripts/render-ios-icon.swift XBTWallet/Resources/xbt_logo.png XBTWallet/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+swift ../scripts/render-ios-icon.swift XBTWallet/Resources/Assets.xcassets/xbt_logo.imageset/xbt_logo.png XBTWallet/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 xcodegen generate
 open XBTWallet.xcodeproj
 ```

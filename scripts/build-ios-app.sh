@@ -5,7 +5,7 @@ project_root="$(cd "$(dirname "$0")/.." && pwd)"
 command -v xcodegen >/dev/null || { echo 'Install XcodeGen: brew install xcodegen' >&2; exit 1; }
 [[ -d "$project_root/ios/Frameworks/Lndmobile.xcframework" ]] || "$project_root/scripts/build-ios-node.sh"
 cd "$project_root/ios"
-swift ../scripts/render-ios-icon.swift XBTWallet/Resources/xbt_logo.png XBTWallet/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+swift ../scripts/render-ios-icon.swift XBTWallet/Resources/Assets.xcassets/xbt_logo.imageset/xbt_logo.png XBTWallet/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
 xcodegen generate
 if [[ "${1:-}" == --simulator ]]; then
   xcodebuild -project XBTWallet.xcodeproj -scheme XBTWallet -configuration Debug \

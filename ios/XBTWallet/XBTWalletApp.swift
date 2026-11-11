@@ -26,7 +26,7 @@ struct RootView: View {
                 switch wallet.phase {
                 case .welcome:
                     Page(title: "Your Lightning Wallet") {
-                        Image("xbt_logo").resizable().scaledToFit().padding(.vertical, 30)
+                        Image("xbt_logo").resizable().scaledToFit().frame(height: 130).padding(.vertical, 30)
                         Text("Your keys. Your XBT.").foregroundStyle(.secondary)
                         Button("Create your wallet") { mode = true }.buttonStyle(WalletButton())
                         if mode {

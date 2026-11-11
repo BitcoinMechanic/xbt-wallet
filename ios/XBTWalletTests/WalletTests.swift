@@ -1,7 +1,13 @@
 import XCTest
+import UIKit
 @testable import XBTWallet
 
 final class WalletTests: XCTestCase {
+    func testLogoIsPackagedInAssetCatalog() {
+        let image = UIImage(named: "xbt_logo")
+        XCTAssertNotNil(image)
+        if let image { XCTAssertEqual(image.size.width / image.size.height, 3, accuracy: 0.01) }
+    }
     func testExactAmountsAndFiatConversion() throws {
         XCTAssertEqual(try Amounts.parse("0.00000001", unit: .xbt, usdRate: nil), 1)
         XCTAssertEqual(try Amounts.parse("50", unit: .usd, usdRate: 250), 20_000_000)
