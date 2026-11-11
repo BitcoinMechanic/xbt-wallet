@@ -379,7 +379,7 @@ public final class MainActivity extends Activity {
         if (!prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         if (title.equals("Home")) {
             Button menu = new Button(this); styleButton(menu, false);
-            menu.setText("⋮"); menu.setTextSize(30f); menu.setPadding(0, 0, 0, 0);
+            menu.setText("⋮"); menu.setTextSize(36f); menu.setPadding(0, 0, 0, 0);
             menu.setBackground(null);
             menu.setContentDescription("Wallet menu");
             FrameLayout.LayoutParams menuSize = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL);
