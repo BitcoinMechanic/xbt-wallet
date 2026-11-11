@@ -144,6 +144,7 @@ public final class MainActivity extends Activity {
             case "Send on chain": return this::sendOnChain;
             case "Receive Lightning": return this::receiveLightning;
             case "Swap requests": return this::swapReceipts;
+            case "Outgoing swaps": return this::outgoingSwaps;
             case "Pay Lightning": return this::payment;
             default: return null; // Never replay submissions or expose a seed by navigating back.
         }
@@ -178,6 +179,7 @@ public final class MainActivity extends Activity {
     private float headerSlide;
     private android.animation.ValueAnimator headerSlideAnimation;
     private String viewingSwapHash;
+    private String viewingSendHash;
     private View walletMenuAnchor;
     private PopupMenu walletPopup;
     private NodeService node;
@@ -214,6 +216,14 @@ public final class MainActivity extends Activity {
                 try {
                     if (SwapReceive.needsRefresh(new org.json.JSONObject(prefs.getString("swap-receive-"+viewingSwapHash, "{}")))) refreshSwapReceive(viewingSwapHash, false);
                 } catch (org.json.JSONException ignored) { /* Keep malformed saved records for explicit inspection. */ }
+            }
+            if (node != null && !busy && screen.equals("Review BTC swap") && viewingSendHash != null) {
+                try {
+                    org.json.JSONObject r = new org.json.JSONObject(prefs.getString("swap-send-" + viewingSendHash, "{}"));
+                    org.json.JSONObject reply = r.optJSONObject("reply");
+                    if (!r.has("last_error") && reply != null && reply.optBoolean("approved") && !reply.optBoolean("terminal") && !reply.has("invoice"))
+                        updateSwapSend(viewingSendHash, "status");
+                } catch (Exception ignored) { }
             }
             handler.postDelayed(this, 5000);
         }
@@ -1561,7 +1571,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     page("Review controller"); text(info.name); text(endpoint); text("XBT → BTC · " + info.network);
                     text("Controller identity\n" + info.identity);
-                    text("Connection checked. Configure Wallet Receive Access after saving to receive BTC through this controller.");
+                    text("Connection checked. Configure Wallet Swap Access after saving to receive BTC through this controller.");
                     button("Save controller", () -> {
                         try {
                             org.json.JSONArray saved = savedControllers(), updated = new org.json.JSONArray();
@@ -1586,7 +1596,7 @@ public final class MainActivity extends Activity {
         text(item.optString("label", item.optString("name"))); text(address);
         text("XBT → BTC · " + item.optString("environment")); text("Saved identity\n" + identity);
         text("Checked when saved: " + java.text.DateFormat.getDateTimeInstance().format(new Date(item.optLong("checked_at"))));
-        button("Configure swap receiving", () -> controllerReceiveSetup(item));
+        button("Configure wallet swap access", () -> controllerReceiveSetup(item));
         button("Check connection", () -> work(() -> {
             prepareControllerTransport(address);
             SwapControllers.inspect(address, prefs.getString("network", "regtest"), identity, controllerTor(address));
@@ -1606,11 +1616,11 @@ public final class MainActivity extends Activity {
         button("Back", this::swapControllers);
     }
     private void controllerReceiveSetup(org.json.JSONObject item) {
-        page("Swap receive access", true, () -> controllerReceiveSetup(item));
+        page("Wallet swap access", true, () -> controllerReceiveSetup(item));
         String identity = item.optString("provider");
-        text("Wallet Receive API address");
+        text("Wallet Swap API address");
         EditText address = field("https://… or http://….onion", prefs.getString("receive-api-" + identity, ""));
-        text("Wallet Receive Access key");
+        text("Wallet Swap Access key");
         EditText token = field("From the controller’s Swap Setup menu", prefs.getString("receive-key-" + identity, ""));
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
         button("Scan access key", () -> scan(token));
@@ -1618,7 +1628,7 @@ public final class MainActivity extends Activity {
             try {
                 String origin = ControllerAddress.origin(address.getText().toString());
                 String key = token.getText().toString().trim();
-                if (!key.matches("[a-f0-9]{64}")) throw new Exception("Enter the 64-character Wallet Receive Access key.");
+                if (!key.matches("[a-f0-9]{64}")) throw new Exception("Enter the 64-character Wallet Swap Access key.");
                 if (!prefs.edit().putString("receive-api-"+identity, origin).putString("receive-key-"+identity,key)
                     .putString("receive-provider",identity).commit()) throw new Exception("Could not save receive settings.");
                 controllerDetails(item);
@@ -2351,10 +2361,151 @@ public final class MainActivity extends Activity {
         });
         button("Home", this::home);
     }
+    private void saveSwapSend(org.json.JSONObject record) throws Exception {
+        if (!prefs.edit().putString("swap-send-" + record.getString("hash"), record.toString()).commit())
+            throw new Exception("Could not save the outgoing swap. No payment will be sent.");
+    }
+    private void prepareSwapSend(String raw, LightningOuterClass.PayReq pay, String label) throws Exception {
+        if (pay.getNumMsat() <= 0) throw new Exception("For a BTC swap, ask the recipient for an invoice with the amount included. Amountless BTC swap invoices are not supported yet.");
+        if (pay.getNumMsat() % 1000 != 0) throw new Exception("This controller requires whole BTC satoshis. Ask the recipient for an invoice without fractional sats.");
+        if (!Policy.invoiceAllowed(true, pay.getNumMsat(), pay.getTimestamp(), pay.getExpiry(), System.currentTimeMillis()/1000))
+            throw new Exception("This BTC invoice has expired or has an invalid amount.");
+        String hash = pay.getPaymentHash();
+        if (prefs.contains("payment-" + hash)) throw new Exception("This invoice already has a recorded payment attempt. Check payment history before retrying.");
+        org.json.JSONObject record;
+        if (prefs.contains("swap-send-" + hash)) {
+            record = new org.json.JSONObject(prefs.getString("swap-send-" + hash, "{}"));
+            if (!raw.equals(record.getString("recipient_invoice"))) throw new Exception("This payment hash already belongs to another saved invoice. Check Outgoing swaps.");
+        } else {
+            String provider = prefs.getString("receive-provider", ""), api = prefs.getString("receive-api-" + provider, "");
+            if (api.isEmpty() || prefs.getString("receive-key-" + provider, "").isEmpty())
+                throw new Exception("This is a BTC invoice. Add a swap controller and configure Wallet Swap Access in the dots menu → Swap controllers first.");
+            record = new org.json.JSONObject().put("hash", hash).put("recipient_invoice", raw).put("btc_msat", pay.getNumMsat())
+                .put("recipient", pay.getDestination()).put("recipient_expiry", Math.addExact(pay.getTimestamp(), pay.getExpiry()))
+                .put("provider", provider).put("api", api).put("environment", prefs.getString("network", "regtest"))
+                .put("label", label).put("created", System.currentTimeMillis());
+            saveSwapSend(record);
+        }
+        runOnUiThread(() -> showSwapSend(record));
+        requestSwapSend(record, "quote");
+    }
+    private void updateSwapSend(String hash, String action) {
+        work(() -> requestSwapSend(new org.json.JSONObject(prefs.getString("swap-send-" + hash, "{}")), action));
+    }
+    private void requestSwapSend(org.json.JSONObject record, String action) throws Exception {
+        record.remove("last_error");
+        try {
+            String api = record.getString("api"); prepareControllerTransport(api);
+            org.json.JSONObject request = new org.json.JSONObject().put("action", action).put("invoice", record.getString("recipient_invoice"))
+                .put("environment", record.getString("environment")).put("provider", record.getString("provider"));
+            if (action.equals("accept") || action.equals("cancel")) request.put("id", record.getJSONObject("reply").getString("id"));
+            org.json.JSONObject reply = SwapControllers.send(api, prefs.getString("receive-key-" + record.getString("provider"), ""), request, controllerTor(api));
+            LightningOuterClass.PayReq decoded = reply.has("invoice") ? LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq",
+                LightningOuterClass.PayReqString.newBuilder().setPayReq(reply.getString("invoice")).build())) : null;
+            SwapSend.validate(record, reply, decoded);
+            record.put("reply", reply);
+            if (!reply.optBoolean("terminal") && System.currentTimeMillis() - record.optLong("market_checked") >= 60000) {
+                record.put("market_checked", System.currentTimeMillis()); record.remove("market_error");
+                try { record.put("market", FiatRates.swapMarket(controllerTor(api))); }
+                catch (Exception e) { record.put("market_error", e.getMessage() == null ? "Market price unavailable" : e.getMessage()); }
+            }
+        } catch (Exception e) { record.put("last_error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()); }
+        saveSwapSend(record);
+        runOnUiThread(() -> { if (screen.equals("Review BTC swap") && record.optString("hash").equals(viewingSendHash)) showSwapSend(record); });
+    }
+    private String swapFeeText(org.json.JSONObject reply) {
+        try {
+            org.json.JSONObject f = reply.getJSONObject("fees");
+            return "Provider fee: " + java.math.BigDecimal.valueOf(f.getLong("markup_bps"), 2).stripTrailingZeros().toPlainString() + "% ("
+                + SwapSend.sats(f.getLong("provider_fee_msat")) + " " + f.getString("provider_fee_asset").toUpperCase(Locale.ROOT) + " sats)"
+                + "\nCoordinator routing cost: " + SwapSend.sats(f.getLong("routing_fee_msat")) + " " + f.getString("routing_fee_asset").toUpperCase(Locale.ROOT) + " sats"
+                + "\nBoth are included in the quoted swap amount.";
+        } catch (Exception e) { return "This controller did not disclose a fee breakdown."; }
+    }
+    private String swapSendMarketText(org.json.JSONObject record) {
+        try {
+            if (record.has("market_error")) throw new Exception(record.getString("market_error"));
+            org.json.JSONObject market = record.getJSONObject("market"), reply = record.getJSONObject("reply");
+            SwapPrice.requireFresh(market.getLong("timestamp"), System.currentTimeMillis());
+            java.math.BigDecimal rate = new java.math.BigDecimal(market.getString("btc_per_xbt"));
+            SwapPrice comparison = new SwapPrice(reply.getLong("xbt_msat"), reply.getLong("btc_msat"), false, rate);
+            java.math.BigDecimal delta = new java.math.BigDecimal(comparison.percent());
+            return (comparison.warning() ? "Warning: over 5% above market.\n" : "")
+                + "Quoted cost: " + delta.abs().toPlainString() + "% " + (delta.signum() >= 0 ? "higher" : "lower") + " than Neoxa market"
+                + "\nNeoxa last trade: 1 XBT = " + rate.stripTrailingZeros().toPlainString() + " BTC"
+                + "\nIncludes provider fee and quoted coordinator routing cost. Your wallet’s routing fee is additional.";
+        } catch (Exception e) { return "Warning: market comparison unavailable. " + (e.getMessage() == null ? "No fresh price." : e.getMessage()); }
+    }
+    private void showSwapSend(org.json.JSONObject record) {
+        page("Review BTC swap"); viewingSendHash = record.optString("hash");
+        text("Recipient receives: " + SwapSend.sats(record.optLong("btc_msat")) + " BTC sats");
+        text("Recipient: " + record.optString("recipient"));
+        text("Provider: " + record.optString("provider"));
+        org.json.JSONObject reply = record.optJSONObject("reply");
+        if (record.has("last_error")) text("Swap request failed: " + record.optString("last_error") + "\nCheck this saved request before retrying. A failed reply does not establish whether the controller accepted it.");
+        if (reply != null) {
+            text("Status: " + reply.optString("state").replace('_', ' '));
+            text("You pay: " + amountReview(reply.optLong("xbt_msat"), amountPrice()));
+            text(swapFeeText(reply)); text(swapSendMarketText(record));
+            text("Pay before " + java.text.DateFormat.getDateTimeInstance().format(new Date(reply.optLong("expires_at") * 1000)));
+            if (prefs.contains("payment-" + record.optString("hash"))) {
+                text("Wallet payment: " + prefs.getString("payment-" + record.optString("hash"), "unknown") + ". Check payment history; this request will not be paid again automatically.");
+                button("Payment history", this::paymentHistory);
+            } else if (!reply.optBoolean("terminal") && !reply.optBoolean("blocked") && reply.optLong("expires_at") > System.currentTimeMillis()/1000) {
+                if (!reply.optBoolean("approved")) {
+                    button("Accept quote", () -> updateSwapSend(record.optString("hash"), "accept"));
+                    button("Cancel quote", () -> updateSwapSend(record.optString("hash"), "cancel"));
+                } else if (reply.has("invoice") && !record.has("last_error")) {
+                    button("Review payment", () -> reviewSwapSendPayment(record.optString("hash")));
+                } else text("Preparing your XBT payment invoice…");
+            }
+        } else text("Requesting a quote. No payment has been sent.");
+        button("Check status", () -> updateSwapSend(record.optString("hash"), "status"));
+        if (reply == null) button("Retry quote", () -> updateSwapSend(record.optString("hash"), "quote"));
+        button("Outgoing swaps", this::outgoingSwaps); button("Home", this::home);
+    }
+    private void outgoingSwaps() {
+        page("Outgoing swaps");
+        List<org.json.JSONObject> records = new ArrayList<>();
+        try {
+            for (String key : prefs.getAll().keySet()) if (key.startsWith("swap-send-")) records.add(new org.json.JSONObject(prefs.getString(key, "{}")));
+            records.sort((a,b) -> Long.compare(b.optLong("created"), a.optLong("created")));
+            for (org.json.JSONObject r : records) {
+                org.json.JSONObject reply = r.optJSONObject("reply");
+                button(SwapSend.sats(r.optLong("btc_msat")) + " BTC sats · " + (reply == null ? "Request pending" : reply.optString("state")), () -> showSwapSend(r));
+            }
+            if (records.isEmpty()) text("No outgoing swaps yet.");
+        } catch (Exception e) { error(e); }
+        button("Back", this::payment);
+    }
+    private void reviewSwapSendPayment(String hash) {
+        work(() -> {
+            org.json.JSONObject record = new org.json.JSONObject(prefs.getString("swap-send-" + hash, "{}"));
+            requestSwapSend(record, "status");
+            if (record.has("last_error")) throw new Exception(record.getString("last_error"));
+            org.json.JSONObject reply = record.getJSONObject("reply");
+            String invoice = reply.getString("invoice");
+            LightningOuterClass.PayReq pay = LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq", LightningOuterClass.PayReqString.newBuilder().setPayReq(invoice).build()));
+            SwapSend.validate(record, reply, pay);
+            long msats = reply.getLong("xbt_msat"), feeLimit = Math.max(1, msats/1000/100);
+            String review = "Recipient receives: " + SwapSend.sats(record.getLong("btc_msat")) + " BTC sats\nYou pay: " + amountReview(msats, amountPrice())
+                + "\n\n" + swapFeeText(reply) + "\n\n" + swapSendMarketText(record)
+                + "\nMaximum wallet routing fee: " + String.format(Locale.US, "%,d", feeLimit) + " XBT sats (" + displayAmount(feeLimit) + ")";
+            runOnUiThread(() -> confirmAction("Pay BTC invoice through swap?", review, "Pay", () -> work(() -> {
+                // The reviewed quote is immutable; only its expiry and local payment marker can change here.
+                if (reply.getLong("expires_at") <= System.currentTimeMillis()/1000) throw new Exception("Swap quote expired. No payment was submitted.");
+                if (!record.has("market_error") && record.has("market")) {
+                    try { SwapPrice.requireFresh(record.getJSONObject("market").getLong("timestamp"), System.currentTimeMillis()); }
+                    catch (Exception e) { throw new Exception("The market comparison has expired. Review the payment again before paying."); }
+                }
+                submitLightningPayment(invoice, pay, msats, record.optString("label"), feeLimit);
+            })));
+        });
+    }
     private void createSwapReceive(long sats, String description, String label) {
         work(() -> {
             String provider = prefs.getString("receive-provider", ""), api=prefs.getString("receive-api-"+provider,""), key=prefs.getString("receive-key-"+provider,"");
-            if (api.isEmpty() || key.isEmpty()) throw new Exception("Select a controller and configure its Wallet Receive Access first.");
+            if (api.isEmpty() || key.isEmpty()) throw new Exception("Select a controller and configure its Wallet Swap Access first.");
             for (String name : prefs.getAll().keySet()) if (name.startsWith("swap-receive-")) {
                 org.json.JSONObject saved=new org.json.JSONObject(prefs.getString(name,"{}"));
                 org.json.JSONObject reply=saved.optJSONObject("reply");
@@ -2444,6 +2595,7 @@ public final class MainActivity extends Activity {
         if (!record.optBoolean("received") && reply!=null && !reply.optBoolean("terminal")) {
             long deadline=reply.optLong("expires_at");
             text("Sender pays "+(reply.optLong("btc_msat")/1000.0)+" BTC sats");
+            text(swapFeeText(reply));
             text("Pay before "+java.text.DateFormat.getTimeInstance().format(new Date(deadline*1000)));
             if (deadline>System.currentTimeMillis()/1000 && reply.has("invoice") && !reply.optBoolean("blocked") && swapMarketReview(record, reply)) {
                 try {
@@ -2473,7 +2625,8 @@ public final class MainActivity extends Activity {
             java.math.BigDecimal price = new java.math.BigDecimal(market.getString("btc_per_xbt"));
             SwapPrice comparison = new SwapPrice(reply.getLong("btc_msat"), reply.getLong("xbt_msat"), true, price);
             text("Neoxa market: 1 XBT = " + price.stripTrailingZeros().toPlainString() + " BTC"
-                + "\nQuoted cost versus market: " + comparison.percent() + "%"
+                + "\nQuoted cost: " + new java.math.BigDecimal(comparison.percent()).abs().toPlainString() + "% "
+                + (comparison.costRatio.compareTo(java.math.BigDecimal.ONE) >= 0 ? "higher" : "lower") + " than Neoxa market"
                 + "\nBased on Neoxa's last trade. Includes charges built into the swap amounts; the sender's routing fee is additional.");
             if (!comparison.warning()) return true;
             warning = "Warning: this swap costs " + comparison.percent() + "% more than Neoxa's market price (over 5%).";
@@ -2513,7 +2666,7 @@ public final class MainActivity extends Activity {
     }
     private void payment() { payment(""); }
     private void payment(String scanned) {
-        page("Pay Lightning"); text("XBT invoices only. Review the recipient and amount before paying.");
+        page("Pay Lightning"); text("XBT invoices pay directly. BTC invoices use your selected swap controller; review its fee and exchange rate before paying.");
         text("Invoice");
         EditText invoice = field("ln...", "");
         invoice.setShowSoftInputOnFocus(false);
@@ -2581,7 +2734,11 @@ public final class MainActivity extends Activity {
             final java.math.BigDecimal reviewPrice = amountPrice();
             work(() -> {
                 LightningOuterClass.PayReq pay = LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq", LightningOuterClass.PayReqString.newBuilder().setPayReq(raw).build()));
-                if (!(pay.containsFeatures(512) || pay.containsFeatures(513))) throw new Exception("This is not an XBT invoice.");
+                if (!(pay.containsFeatures(512) || pay.containsFeatures(513))) {
+                    if (pay.containsFeatures(514) || pay.containsFeatures(515)) throw new Exception("This invoice uses an unsupported chain feature.");
+                    prepareSwapSend(raw, pay, paymentLabel);
+                    return;
+                }
                 final boolean amountless = pay.getNumMsat() == 0;
                 if (amountless && entered.trim().isEmpty()) {
                     runOnUiThread(() -> entry.visible(true));
@@ -2592,41 +2749,47 @@ public final class MainActivity extends Activity {
                 if (prefs.contains("payment-" + pay.getPaymentHash())) throw new Exception("This invoice already has a recorded attempt. Reconcile its status before retrying.");
                 long feeLimit = Math.max(1, msats/1000/100);
                 runOnUiThread(() -> confirmAction("Pay XBT invoice?", amountReview(msats, reviewPrice) + "\nMaximum routing fee: " + displayAmount(feeLimit) + "\nRecipient: " + pay.getDestination(), "Pay", () -> work(()->{
-                        if (!prefs.edit().putString("payment-" + pay.getPaymentHash(), "submitted").putString("payment-label-" + pay.getPaymentHash(), paymentLabel).commit()) throw new Exception("Could not record payment");
-                        routerrpc.RouterOuterClass.SendPaymentRequest.Builder request = routerrpc.RouterOuterClass.SendPaymentRequest.newBuilder()
-                            .setPaymentRequest(raw).setFeeLimitSat(feeLimit).setTimeoutSeconds(30).setMaxParts(1);
-                        if (amountless) request.setAmtMsat(msats);
-                        runOnUiThread(() -> { page("Payment submitted"); text("Waiting for the node to report settlement. Closing this screen does not cancel the payment."); button("Home", this::home); });
-                        lndmobile.Lndmobile.routerSendPaymentV2(request.build().toByteArray(), new lndmobile.RecvStream() {
-                            private volatile boolean terminal;
-                            public void onResponse(byte[] data) {
-                                try {
-                                    LightningOuterClass.Payment result = LightningOuterClass.Payment.parseFrom(data);
-                                    terminal = result.getStatus() == LightningOuterClass.Payment.PaymentStatus.SUCCEEDED || result.getStatus() == LightningOuterClass.Payment.PaymentStatus.FAILED;
-                                    String status = "Payment " + result.getStatus().name().toLowerCase(Locale.ROOT);
-                                    if (result.getStatus() == LightningOuterClass.Payment.PaymentStatus.FAILED) status += ": " + result.getFailureReason().name();
-                                    prefs.edit().putString("payment-" + pay.getPaymentHash(), status).commit();
-                                    final String label = status;
-                                    final boolean succeeded = result.getStatus() == LightningOuterClass.Payment.PaymentStatus.SUCCEEDED;
-                                    runOnUiThread(() -> {
-                                        if (isDestroyed()) return;
-                                        page(succeeded ? "Payment successful" : label);
-                                        if (succeeded) {
-                                            PaymentHandshakeView handshake = new PaymentHandshakeView(MainActivity.this);
-                                            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, dp(220));
-                                            size.topMargin = dp(20); size.bottomMargin = dp(20);
-                                            page.addView(handshake, size);
-                                        }
-                                        button("Home", MainActivity.this::home);
-                                    });
-                                } catch (Exception e) { onError(e); }
-                            }
-                            public void onError(Exception e) { if (terminal) return; runOnUiThread(() -> { if (!isDestroyed()) error(new Exception("Payment status uncertain. Refresh payment history before any further attempt. " + e.getMessage())); }); }
-                        });
+                        submitLightningPayment(raw, pay, msats, paymentLabel, feeLimit);
                     })));
             });
-        }); button("Home", this::home);
+        }); button("Outgoing swaps", this::outgoingSwaps); button("Home", this::home);
         if (!scanned.isEmpty()) invoice.setText(scanned);
+    }
+    private void submitLightningPayment(String raw, LightningOuterClass.PayReq pay, long msats, String paymentLabel, long feeLimit) throws Exception {
+        if (prefs.contains("payment-" + pay.getPaymentHash())) throw new Exception("This invoice already has a recorded payment attempt. Check payment history before retrying.");
+        if (!Policy.invoiceAllowed(pay.containsFeatures(512) || pay.containsFeatures(513), msats, pay.getTimestamp(), pay.getExpiry(), System.currentTimeMillis()/1000))
+            throw new Exception("The payment invoice has expired. No payment was submitted.");
+        if (!prefs.edit().putString("payment-" + pay.getPaymentHash(), "submitted").putString("payment-label-" + pay.getPaymentHash(), paymentLabel).commit()) throw new Exception("Could not record payment");
+        routerrpc.RouterOuterClass.SendPaymentRequest.Builder request = routerrpc.RouterOuterClass.SendPaymentRequest.newBuilder()
+            .setPaymentRequest(raw).setFeeLimitSat(feeLimit).setTimeoutSeconds(30).setMaxParts(1);
+        if (pay.getNumMsat() == 0) request.setAmtMsat(msats);
+        runOnUiThread(() -> { page("Payment submitted"); text("Waiting for the node to report settlement. Closing this screen does not cancel the payment."); button("Home", this::home); });
+        lndmobile.Lndmobile.routerSendPaymentV2(request.build().toByteArray(), new lndmobile.RecvStream() {
+            private volatile boolean terminal;
+            public void onResponse(byte[] data) {
+                try {
+                    LightningOuterClass.Payment result = LightningOuterClass.Payment.parseFrom(data);
+                    terminal = result.getStatus() == LightningOuterClass.Payment.PaymentStatus.SUCCEEDED || result.getStatus() == LightningOuterClass.Payment.PaymentStatus.FAILED;
+                    String status = "Payment " + result.getStatus().name().toLowerCase(Locale.ROOT);
+                    if (result.getStatus() == LightningOuterClass.Payment.PaymentStatus.FAILED) status += ": " + result.getFailureReason().name();
+                    prefs.edit().putString("payment-" + pay.getPaymentHash(), status).commit();
+                    final String label = status;
+                    final boolean succeeded = result.getStatus() == LightningOuterClass.Payment.PaymentStatus.SUCCEEDED;
+                    runOnUiThread(() -> {
+                        if (isDestroyed()) return;
+                        page(succeeded ? "Payment successful" : label);
+                        if (succeeded) {
+                            PaymentHandshakeView handshake = new PaymentHandshakeView(MainActivity.this);
+                            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, dp(220));
+                            size.topMargin = dp(20); size.bottomMargin = dp(20);
+                            page.addView(handshake, size);
+                        }
+                        button("Home", MainActivity.this::home);
+                    });
+                } catch (Exception e) { onError(e); }
+            }
+            public void onError(Exception e) { if (terminal) return; runOnUiThread(() -> { if (!isDestroyed()) error(new Exception("Payment status uncertain. Refresh payment history before any further attempt. " + e.getMessage())); }); }
+        });
     }
     private void scan(EditText target) {
         scanTarget = target;

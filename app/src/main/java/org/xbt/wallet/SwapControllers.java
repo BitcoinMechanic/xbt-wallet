@@ -6,7 +6,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
-/** Controller discovery and scoped BTC-to-XBT receive requests. Never submits a wallet payment. */
+/** Controller discovery and scoped bidirectional swap requests. Never submits a wallet payment. */
 final class SwapControllers {
     static final int LIMIT = 65536;
     static final String INFO = "/v1/provider/info", DIRECTORY = "/v1/providers";
@@ -59,25 +59,37 @@ final class SwapControllers {
         return result;
     }
     static JSONObject receive(String origin, String token, JSONObject request, boolean useTor) throws Exception {
-        if (!token.matches("[a-f0-9]{64}")) throw new Exception("Configure this controller’s Wallet Receive Access key first.");
-        JSONObject response = request(ControllerAddress.origin(origin), "/v1/receive", useTor, request, token);
+        return walletRequest(origin, token, request, useTor, "/v1/receive");
+    }
+    static JSONObject send(String origin, String token, JSONObject request, boolean useTor) throws Exception {
+        return walletRequest(origin, token, request, useTor, "/v1/send");
+    }
+    private static JSONObject walletRequest(String origin, String token, JSONObject request, boolean useTor, String path) throws Exception {
+        if (!token.matches("[a-f0-9]{64}")) throw new Exception("Configure this controller’s Wallet Swap Access key first.");
+        JSONObject response = request(ControllerAddress.origin(origin), path, useTor, request, token);
         if (response.has("error")) {
             String code = response.getString("error");
             String message = switch (code) {
                 case "grant_closed" -> "The node grant expired, was paused, or was replaced. Wait for the controller to refresh its node pairing, then check this request.";
                 case "channel_requires_recovery", "previous_enrollment_requires_recovery" -> "The coordinator must resolve an earlier channel or swap before accepting this request.";
                 case "route_outside_approved_channels", "approved_channel_changed" -> "The route uses a channel outside the current node grant. The controller operator must refresh its approved channels.";
+                case "wallet_send_not_found" -> "The controller has not recorded this outgoing swap. Retry the quote using the same recipient invoice.";
+                case "wallet_quote_changed" -> "The controller did not accept the exact reviewed quote. No payment was submitted.";
                 case "wallet_receive_not_found" -> "The controller has not recorded this request. Use Retry request to resume with the same invoice.";
-                case "service_previous_swap_active" -> "This controller is still handling another BTC-to-XBT swap. Wait for it to finish.";
+                case "service_previous_swap_active" -> "This controller is still handling another swap in this direction. Wait for it to finish.";
+                case "market_unavailable", "market_data_invalid" -> "The controller could not obtain valid, fresh Neoxa pricing. No new quote was approved.";
+                case "market_amount_limit" -> "This swap exceeds the controller’s quote limits (up to 1,000,000 XBT sats and 10,000 BTC sats, including applicable costs). Use a smaller invoice.";
+                case "market_depth_unavailable" -> "Neoxa’s order book has insufficient depth within the controller’s price limits for this amount.";
+                case "service_review_superseded" -> "The controller’s node pairing changed since this quote was created. Cancel the unapproved quote and request a fresh invoice.";
                 case "service_pairing_required" -> "The controller has not paired its Lightning nodes.";
                 case "service_history_full" -> "The controller’s swap history is full. Its operator must resolve this.";
-                case "incoming_amount_below_safe_minimum" -> "The BTC amount is below the channel’s safe payment minimum. Use a larger XBT receive amount.";
-                case "bounded_route_unavailable", "recipient_route_unknown" -> "The controller cannot find a route to this wallet. Check its inbound liquidity and invoice route hints.";
-                default -> "Controller refused the receive request.";
+                case "incoming_amount_below_safe_minimum" -> "The incoming swap amount is below the channel’s safe payment minimum. Use a larger recipient invoice.";
+                case "bounded_route_unavailable", "recipient_route_unknown" -> "The controller cannot find a route to the recipient wallet within its limits. Check the recipient’s inbound liquidity and invoice route hints.";
+                default -> "Controller refused the swap request.";
             };
             String details = code.matches("[a-z_]{1,80}") ? "\nCode: " + code : "";
             JSONObject diagnostic = response.optJSONObject("diagnostic");
-            if (diagnostic != null) for (String field : new String[]{"node", "operation", "stage", "http_status", "rpc_code", "reference", "amount_msat", "minimum_msat", "maximum_msat"}) {
+            if (diagnostic != null) for (String field : new String[]{"node", "role", "operation", "stage", "http_status", "rpc_code", "reference", "amount_msat", "minimum_msat", "maximum_msat"}) {
                 String value = diagnostic.optString(field, "");
                 if (value.matches("[a-zA-Z0-9_.-]{1,80}")) details += "\n" + field + ": " + value;
             }
@@ -109,7 +121,7 @@ final class SwapControllers {
                 try (OutputStream out = connection.getOutputStream()) { out.write(bytes); }
             }
             try {
-                if (connection.getResponseCode()==401) throw new Exception("Controller access denied. Check Wallet Receive Access and the saved key.");
+                if (connection.getResponseCode()==401) throw new Exception("Controller access denied. Check Wallet Swap Access and the saved key.");
                 if (connection.getResponseCode() != 200) throw new Exception("Controller unavailable (HTTP " + connection.getResponseCode() + ").");
                 String type = connection.getContentType();
                 if (type == null || !type.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) throw new Exception("Controller did not return JSON.");
@@ -150,7 +162,7 @@ final class SwapControllers {
             String raw = new String(all, StandardCharsets.ISO_8859_1); int split = raw.indexOf("\r\n\r\n");
             if (split < 0 || split > 8192) throw new Exception("Invalid controller HTTP response.");
             String[] headers = raw.substring(0, split).split("\r\n");
-            if (headers[0].contains(" 401 ")) throw new Exception("Controller access denied. Check Wallet Receive Access and the saved key.");
+            if (headers[0].contains(" 401 ")) throw new Exception("Controller access denied. Check Wallet Swap Access and the saved key.");
             if (!headers[0].matches("HTTP/1\\.[01] 200(?: .*)?")) throw new Exception("Controller unavailable through Tor.");
             Map<String, String> fields = new HashMap<>();
             for (int i=1; i<headers.length; i++) {
