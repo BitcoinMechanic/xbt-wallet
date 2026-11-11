@@ -882,15 +882,16 @@ public final class MainActivity extends Activity {
             for (int i = 0; i < values.length; i++) {
                 LinearLayout line = new LinearLayout(this); line.setGravity(Gravity.CENTER_VERTICAL);
                 TextView caption = new TextView(this); caption.setText(labels[i]); caption.setTextSize(12);
+                caption.setGravity(Gravity.END); caption.setPadding(0, 0, dp(6), 0);
                 caption.setTextColor(i == 0 ? 0xffa8efd5 : 0xffb59b72);
                 caption.setOnClickListener(cycleUnits);
-                line.addView(caption, new LinearLayout.LayoutParams(dp(76), -2));
+                line.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
                 Button value = values[i];
                 value.setPadding(dp(4), 0, dp(4), 0);
                 value.setMinHeight(0); value.setMinimumHeight(0);
                 value.setGravity(Gravity.END | Gravity.CENTER_VERTICAL); value.setMaxLines(1);
-                value.setAutoSizeTextTypeUniformWithConfiguration(8, 17, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
-                line.addView(value, new LinearLayout.LayoutParams(0, dp(36), 1));
+                value.setTextSize(14.5f);
+                line.addView(value, new LinearLayout.LayoutParams(-2, dp(36)));
                 liquidity.addView(line, new LinearLayout.LayoutParams(-1, -2));
             }
             balanceRow.addView(liquidity, amountSize);
