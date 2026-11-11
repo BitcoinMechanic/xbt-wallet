@@ -381,7 +381,9 @@ public final class MainActivity extends Activity {
         page.addView(header, headerSize);
         if (!title.equals("Home")) {
             boolean onboarding = title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
-                || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Wallet is starting") || title.equals("Wallets");
+                || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Wallet is starting") || title.equals("Wallets")
+                || title.equals("Payment history") || title.equals("On chain funds") || title.equals("Channels")
+                || title.equals("Swap controllers") || title.equals("Advanced");
             TextView heading;
             if (onboarding) {
                 heading = new OnboardingTitleView(this); heading.setText(title);
