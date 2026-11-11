@@ -1008,6 +1008,15 @@ public final class MainActivity extends Activity {
     private String channelBalances(long local, long remote) {
         return "Local: " + displayAmount(local) + "\nRemote: " + displayAmount(remote);
     }
+    private void fundingOutput(String point) {
+        TextView output = text("Funding output\n" + point);
+        output.setContentDescription("Funding output: " + point + ". Tap to copy.");
+        output.setOnClickListener(v -> {
+            getSystemService(android.content.ClipboardManager.class)
+                .setPrimaryClip(ClipData.newPlainText("Funding output", point));
+            Toast.makeText(this, "Funding output copied", Toast.LENGTH_SHORT).show();
+        });
+    }
     private void rememberChannelOrigin() {
         if (screen.equals("Home")) channelDetailsFromHome = true;
         else if (screen.equals("Channels")) channelDetailsFromHome = false;
@@ -1020,7 +1029,7 @@ public final class MainActivity extends Activity {
         text(status);
         text(channel.getCapacity() + " sats capacity\n" + channel.getLocalBalance() + " sats local balance");
         text("Peer\n" + channel.getRemoteNodePub());
-        text("Funding output\n" + channel.getChannelPoint());
+        fundingOutput(channel.getChannelPoint());
         button(label.isEmpty() ? "Add label" : "Edit label", () -> labelChannel(channel.getChannelPoint(), () -> pendingChannelDetails(channel, status)));
         button(channelDetailsFromHome ? "Home" : "Back to channels",
             channelDetailsFromHome ? this::home : this::channelList);
@@ -1053,7 +1062,7 @@ public final class MainActivity extends Activity {
         text((channel.getActive() ? "Online" : "Offline") + " · " + channel.getCapacity() + " sats capacity");
         text(channel.getLocalBalance() + " sats local balance\n" + channel.getRemoteBalance() + " sats remote balance");
         text("Peer\n" + channel.getRemotePubkey());
-        text("Funding output\n" + channel.getChannelPoint());
+        fundingOutput(channel.getChannelPoint());
         String key = "channel-close-" + channel.getChannelPoint();
         String closing = prefs.getString(key, "");
         if (!closing.isEmpty()) text(closing);
@@ -1589,7 +1598,11 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.Utxo coin : unspent.getUtxosList()) { CheckBox box = new CheckBox(this); box.setText((coinLabel(coin).isEmpty() ? "" : coinLabel(coin) + " · ") + displayAmount(coin.getAmountSat()) + " · " + coin.getOutpoint().getTxidStr() + ":" + coin.getOutpoint().getOutputIndex()); page.addView(box); coinBoxes.put(box, coin); }
                 EditText peer = field("pubkey@host:port", "");
                 AmountEntry funds = new AmountEntry("Funds to use", "");
-                EditText amount = funds.input, fee = field("Fee rate in sats/vbyte", "1");
+                EditText amount = funds.input;
+                text("Network fee rate (sats/vByte)");
+                EditText fee = field("", "1");
+                fee.setContentDescription("Network fee rate in sats per vByte");
+                fee.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
                 CheckBox useAll = new CheckBox(this); useAll.setText("Use all selected funds"); page.addView(useAll);
                 final String[] manualCapacity = {""};
                 Runnable updateTotal = () -> {
