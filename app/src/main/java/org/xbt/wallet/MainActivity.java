@@ -83,6 +83,7 @@ public final class MainActivity extends Activity {
     private boolean bound, busy;
     private String screen = "";
     private int historyTab;
+    private boolean channelDetailsFromHome;
     private final boolean[] homeActionsExpanded = new boolean[2];
     private final LinearLayout[] homeActionsViews = new LinearLayout[2];
     private final android.animation.ValueAnimator[] homeActionsAnimation = new android.animation.ValueAnimator[2];
@@ -895,7 +896,12 @@ public final class MainActivity extends Activity {
     private String channelBalances(long local, long remote) {
         return "Local: " + displayAmount(local) + "\nRemote: " + displayAmount(remote);
     }
+    private void rememberChannelOrigin() {
+        if (screen.equals("Home")) channelDetailsFromHome = true;
+        else if (screen.equals("Channels")) channelDetailsFromHome = false;
+    }
     private void pendingChannelDetails(LightningOuterClass.PendingChannelsResponse.PendingChannel channel, String status) {
+        rememberChannelOrigin();
         page("Pending channel details");
         String label = prefs.getString("channel-label-" + channel.getChannelPoint(), "");
         if (!label.isEmpty()) text(label);
@@ -904,7 +910,8 @@ public final class MainActivity extends Activity {
         text("Peer\n" + channel.getRemoteNodePub());
         text("Funding output\n" + channel.getChannelPoint());
         button(label.isEmpty() ? "Add label" : "Edit label", () -> labelChannel(channel.getChannelPoint(), () -> pendingChannelDetails(channel, status)));
-        button("Back to channels", this::channelList);
+        button(channelDetailsFromHome ? "Back to Home" : "Back to channels",
+            channelDetailsFromHome ? this::home : this::channelList);
     }
     private String channelLabelPrefix(String point) {
         String label = prefs.getString("channel-label-" + point, "");
@@ -926,6 +933,7 @@ public final class MainActivity extends Activity {
             }).show();
     }
     private void channelDetails(LightningOuterClass.Channel channel) {
+        rememberChannelOrigin();
         page("Channel details");
         String label = prefs.getString("channel-label-" + channel.getChannelPoint(), "");
         if (!label.isEmpty()) text(label);
@@ -950,7 +958,8 @@ public final class MainActivity extends Activity {
         });
         close.setEnabled(channel.getActive() && closing.isEmpty());
         if (!channel.getActive()) text("Reconnect to the peer before closing cooperatively.");
-        button("Back to channels", this::channelList);
+        button(channelDetailsFromHome ? "Back to Home" : "Back to channels",
+            channelDetailsFromHome ? this::home : this::channelList);
     }
     private void closeChannel(LightningOuterClass.Channel channel, long fee) {
         work(() -> {
