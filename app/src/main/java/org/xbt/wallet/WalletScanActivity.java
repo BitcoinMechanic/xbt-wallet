@@ -9,7 +9,7 @@ public final class WalletScanActivity extends CaptureActivity {
     @Override protected void attachBaseContext(Context base) {
         Configuration config = new Configuration(base.getResources().getConfiguration());
         config.densityDpi = Math.round(config.densityDpi * 0.75f);
-        config.fontScale *= 1.15f;
+        config.fontScale *= 1.15f * 1.10f;
         super.attachBaseContext(base.createConfigurationContext(config));
     }
 }

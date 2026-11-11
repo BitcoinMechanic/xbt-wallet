@@ -20,7 +20,7 @@ public final class MainActivity extends Activity {
     @Override protected void attachBaseContext(Context base) {
         android.content.res.Configuration config = new android.content.res.Configuration(base.getResources().getConfiguration());
         config.densityDpi = Math.round(config.densityDpi * UI_SCALE);
-        config.fontScale *= 1.15f;
+        config.fontScale *= 1.15f * 1.10f;
         super.attachBaseContext(base.createConfigurationContext(config));
     }
     private void clearFieldFocusOutside(Window window, android.view.MotionEvent event) {
@@ -359,7 +359,7 @@ public final class MainActivity extends Activity {
         if (!prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         if (title.equals("Home")) {
             Button menu = new Button(this); styleButton(menu, false);
-            menu.setText("⋮"); menu.setTextSize(27.5f); menu.setPadding(0, 0, 0, 0);
+            menu.setText("⋮"); menu.setTextSize(30f); menu.setPadding(0, 0, 0, 0);
             menu.setBackground(null);
             menu.setContentDescription("Wallet menu");
             FrameLayout.LayoutParams menuSize = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL);
@@ -793,17 +793,21 @@ public final class MainActivity extends Activity {
         }
     }
     private void homeChannelRow(LinearLayout channels, String point, int number, String peer, String status, int color, String confirmations, boolean disconnected, long local, long remote, Runnable details) {
+        // Preserve the Home channel rows at their previous font scale, including accessibility scaling.
+        android.content.res.Configuration channelConfig = new android.content.res.Configuration(getResources().getConfiguration());
+        channelConfig.fontScale /= 1.10f;
+        Context channelContext = createConfigurationContext(channelConfig);
         String label = prefs.getString("channel-label-" + point, "");
         if (label.isEmpty()) label = "Channel " + number;
         LinearLayout row = new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(4), dp(10), dp(4), dp(10));
-        TextView name = new TextView(this);
+        TextView name = new TextView(channelContext);
         name.setText(label); name.setTextSize(16); name.setTextColor(0xffe5eee9);
         name.setMaxLines(1); name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
         if (!confirmations.isEmpty()) {
-            TextView confirmation = new TextView(this);
+            TextView confirmation = new TextView(channelContext);
             confirmation.setText(confirmations); confirmation.setTextSize(11);
             confirmation.setTextColor(0xffafbeb6);
             row.addView(confirmation, new LinearLayout.LayoutParams(-2, -2));
@@ -847,7 +851,7 @@ public final class MainActivity extends Activity {
         LinearLayout balanceRow = new LinearLayout(this);
         for (int side = 0; side < 2; side++) {
             long value = side == 0 ? local : remote;
-            TextView balances = new TextView(this);
+            TextView balances = new TextView(channelContext);
             balances.setText((side == 0 ? "Local: " : "Remote: ") + displayAmount(value));
             balances.setTextSize(12.6f); balances.setTextColor(0xffafbeb6);
             balances.setGravity(side == 0 ? Gravity.START : Gravity.END);
@@ -856,14 +860,14 @@ public final class MainActivity extends Activity {
         }
         expanded.addView(balanceRow);
         LinearLayout statusRow = new LinearLayout(this); statusRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView statusTitle = new TextView(this); statusTitle.setText("Status:"); statusTitle.setTextSize(12.6f); statusTitle.setTextColor(0xffafbeb6);
+        TextView statusTitle = new TextView(channelContext); statusTitle.setText("Status:"); statusTitle.setTextSize(12.6f); statusTitle.setTextColor(0xffafbeb6);
         statusRow.addView(statusTitle, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout connection = new LinearLayout(this); connection.setGravity(Gravity.CENTER_VERTICAL);
-        TextView statusText = new TextView(this); statusText.setText(status); statusText.setTextSize(12.6f); statusText.setTextColor(0xffafbeb6);
+        TextView statusText = new TextView(channelContext); statusText.setText(status); statusText.setTextSize(12.6f); statusText.setTextColor(0xffafbeb6);
         statusText.setGravity(Gravity.END);
         connection.addView(statusText, new LinearLayout.LayoutParams(0, -2, 1));
         if (disconnected) {
-            Button retry = new Button(this); styleButton(retry, false); retry.setText("↻"); retry.setTextSize(13.65f);
+            Button retry = new Button(channelContext); styleButton(retry, false); retry.setText("↻"); retry.setTextSize(13.65f);
             retry.setPadding(0, 0, 0, 0); retry.setMinHeight(0); retry.setMinimumHeight(0);
             retry.setBackground(null);
             retry.setContentDescription("Reconnect to channel peer"); retry.setEnabled(!reconnectingPeers.contains(peer));
@@ -882,7 +886,7 @@ public final class MainActivity extends Activity {
         }
         statusRow.addView(connection, new LinearLayout.LayoutParams(0, -2, 1));
         expanded.addView(statusRow);
-        TextView more = new TextView(this); more.setText("Channel details"); more.setTextSize(12.6f); more.setTextColor(0xffa8efd5);
+        TextView more = new TextView(channelContext); more.setText("Channel details"); more.setTextSize(12.6f); more.setTextColor(0xffa8efd5);
         more.setPadding(0, dp(10), 0, dp(10)); more.setOnClickListener(v -> details.run());
         expanded.addView(more);
         card.addView(expanded, new LinearLayout.LayoutParams(-1, -2));
@@ -1016,14 +1020,14 @@ public final class MainActivity extends Activity {
         } else {
             LinearLayout liquidity = new LinearLayout(this); liquidity.setOrientation(LinearLayout.VERTICAL);
             Button incoming = new Button(this); styleButton(incoming, false); incoming.setBackground(null);
-            incoming.setTextColor(0xffb59b72); incoming.setOnClickListener(cycleUnits); balanceAmounts[2] = incoming;
+            incoming.setTextColor(0xffe8d2a7); incoming.setOnClickListener(cycleUnits); balanceAmounts[2] = incoming;
             Button[] values = {amount, incoming};
             String[] labels = {"Spendable", "Receivable"};
             for (int i = 0; i < values.length; i++) {
                 LinearLayout line = new LinearLayout(this); line.setGravity(Gravity.CENTER_VERTICAL);
                 TextView caption = new TextView(this); caption.setText(labels[i]); caption.setTextSize(12);
                 caption.setGravity(Gravity.END); caption.setPadding(0, 0, dp(6), 0);
-                caption.setTextColor(i == 0 ? 0xffa8efd5 : 0xffb59b72);
+                caption.setTextColor(i == 0 ? 0xffa8efd5 : 0xffe8d2a7);
                 caption.setOnClickListener(cycleUnits);
                 line.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
                 Button value = values[i];
