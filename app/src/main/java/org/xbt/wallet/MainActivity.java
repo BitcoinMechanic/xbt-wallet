@@ -710,14 +710,14 @@ public final class MainActivity extends Activity {
         statusText.setGravity(Gravity.END);
         connection.addView(statusText, new LinearLayout.LayoutParams(0, -2, 1));
         if (disconnected) {
-            Button retry = new Button(this); styleButton(retry, false); retry.setText("↻"); retry.setTextSize(20);
+            Button retry = new Button(this); styleButton(retry, false); retry.setText("↻"); retry.setTextSize(13);
             retry.setPadding(0, 0, 0, 0); retry.setMinHeight(0); retry.setMinimumHeight(0);
-            retry.setBackground(surface(0xff1d2723, 24, 0xff304037));
+            retry.setBackground(null);
             retry.setContentDescription("Reconnect to channel peer"); retry.setEnabled(!reconnectingPeers.contains(peer));
             retry.setOnClickListener(v -> connectPeerAddress(peer, null, () -> {
                 retry.setEnabled(false); statusText.setText("Reconnecting"); lightColor[0] = 0xffffb454;
             }, this::home));
-            connection.addView(retry, new LinearLayout.LayoutParams(dp(44), dp(44)));
+            connection.addView(retry, new LinearLayout.LayoutParams(dp(28.6f), dp(28.6f)));
         }
         statusRow.addView(connection, new LinearLayout.LayoutParams(0, -2, 1));
         expanded.addView(statusRow);
