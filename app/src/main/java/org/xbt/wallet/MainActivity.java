@@ -614,10 +614,34 @@ public final class MainActivity extends Activity {
                 else switchWallet(id);
             });
         }
+        button("Rename selected wallet", this::renameWallet);
         styleDestructiveButton(button("Delete selected wallet", this::deleteWallet));
-        text("To delete another wallet, select it first.");
+        text("To rename or delete another wallet, select it first.");
         button("Create a new wallet", this::newWallet);
         button("Home", this::home);
+    }
+    private void renameWallet() {
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(8), dp(20), dp(8));
+        TextView caption = new TextView(this); caption.setText("Name"); caption.setTextSize(15);
+        caption.setTextColor(0xffafbeb6); form.addView(caption);
+        EditText name = field(form, "Optional", prefs.getString("wallet-name", ""));
+        name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(32)});
+        name.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        name.setSelectAllOnFocus(true);
+        name.setContentDescription("Wallet name, up to 32 characters");
+        TextView help = new TextView(this); help.setText("Leave blank to use the default name."); help.setTextSize(13);
+        help.setTextColor(0xffafbeb6); help.setPadding(0, dp(8), 0, dp(8)); form.addView(help);
+        AlertDialog dialog = new WalletDialogBuilder().setTitle("Rename wallet").setView(form)
+            .setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
+        dialog.show();
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String value = name.getText().toString().trim();
+            android.content.SharedPreferences.Editor edit = prefs.edit();
+            if (value.isEmpty()) edit.remove("wallet-name"); else edit.putString("wallet-name", value);
+            if (!edit.commit()) { error(new Exception("Could not save the wallet name.")); return; }
+            dialog.dismiss(); wallets();
+        });
     }
     private void newWallet() {
         // Do not register a draft until the current runtime has stopped successfully.
