@@ -521,6 +521,7 @@ public final class MainActivity extends Activity {
         LinearLayout channels = new LinearLayout(this); channels.setOrientation(LinearLayout.VERTICAL);
         boolean open = prefs.getBoolean("home-channels-expanded", true);
         Button heading = button(open ? "Channels ▾" : "Channels ▸", () -> {});
+        heading.setBackground(null);
         heading.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         heading.setOnClickListener(v -> {
             boolean expand = !prefs.getBoolean("home-channels-expanded", true);
@@ -583,7 +584,7 @@ public final class MainActivity extends Activity {
                 outline.addRoundRect(0, 0, getWidth(), getHeight(), getHeight() / 2f, getHeight() / 2f, android.graphics.Path.Direction.CW);
                 int saved = canvas.save(); canvas.clipPath(outline);
                 paint.setColor(0xffb59b72); canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-                paint.setColor(0xff80d8b2); canvas.drawRect(0, 0, getWidth() * fraction, getHeight(), paint);
+                paint.setColor(0xff65d89a); canvas.drawRect(0, 0, getWidth() * fraction, getHeight(), paint);
                 canvas.restoreToCount(saved);
             }
         };
