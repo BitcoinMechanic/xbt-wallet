@@ -49,12 +49,22 @@ jobs:
         run: |
           device_id=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; ds=json.load(sys.stdin)["devices"]; print(next(d["udid"] for group in ds.values() for d in group if "iPhone" in d["name"]))')
           xcodebuild -project XBTWallet.xcodeproj -scheme XBTWallet -configuration Debug -destination "platform=iOS Simulator,id=$device_id" -derivedDataPath DerivedData -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO test
+      - name: Package app bundles preserving executable permissions
+        if: always()
+        working-directory: ios
+        run: |
+          if [ -d XBTWallet.xcarchive ]; then
+            tar -czf XBTWallet-unsigned.xcarchive.tar.gz XBTWallet.xcarchive
+          fi
+          if [ -d DerivedData/Build/Products/Debug-iphonesimulator/XBTWallet.app ]; then
+            tar -czf XBTWallet-simulator.tar.gz -C DerivedData/Build/Products/Debug-iphonesimulator XBTWallet.app
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: iPhone-build-and-tests
           path: |
-            ios/XBTWallet.xcarchive
-            ios/DerivedData/Build/Products/Debug-iphonesimulator/XBTWallet.app
+            ios/XBTWallet-unsigned.xcarchive.tar.gz
+            ios/XBTWallet-simulator.tar.gz
             ios/TestResults.xcresult
           retention-days: 14

@@ -29,7 +29,15 @@ and an App Store Connect app record.
 `.github/workflows/ios.yml` builds the engine and unsigned device app on macOS,
 then compiles/runs unit, engine lifecycle and onboarding tests in an iPhone
 simulator. An unsigned `.app` is **not installable on a normal iPhone**; it needs
-signing in Xcode. A simulator `.app` is only for the simulator.
+signing in Xcode. A simulator `.app` is only for the simulator. The downloadable
+archive and simulator bundles are wrapped in `.tar.gz` files to preserve executable
+permissions when transported through GitHub artifacts.
+
+The macOS pipeline has successfully archived the device target and passed seven
+simulator checks: exact amount conversion, payment QR parsing, protobuf integer
+precision, durable duplicate-payment protection, logo packaging, native engine
+seed generation/restart, and onboarding/cancellation. This does not constitute
+live-payment or physical-device validation.
 
 ## Port status
 
