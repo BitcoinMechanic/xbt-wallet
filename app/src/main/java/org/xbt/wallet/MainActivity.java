@@ -710,14 +710,22 @@ public final class MainActivity extends Activity {
         statusText.setGravity(Gravity.END);
         connection.addView(statusText, new LinearLayout.LayoutParams(0, -2, 1));
         if (disconnected) {
-            Button retry = new Button(this); styleButton(retry, false); retry.setText("↻"); retry.setTextSize(13);
+            Button retry = new Button(this); styleButton(retry, false); retry.setText("↻"); retry.setTextSize(13.65f);
             retry.setPadding(0, 0, 0, 0); retry.setMinHeight(0); retry.setMinimumHeight(0);
             retry.setBackground(null);
             retry.setContentDescription("Reconnect to channel peer"); retry.setEnabled(!reconnectingPeers.contains(peer));
+            android.animation.ObjectAnimator spin = android.animation.ObjectAnimator.ofFloat(retry, View.ROTATION, 0f, 360f);
+            spin.setDuration(900); spin.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            spin.setInterpolator(new android.view.animation.LinearInterpolator());
+            retry.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+                @Override public void onViewAttachedToWindow(View view) { }
+                @Override public void onViewDetachedFromWindow(View view) { spin.cancel(); }
+            });
             retry.setOnClickListener(v -> connectPeerAddress(peer, null, () -> {
                 retry.setEnabled(false); statusText.setText("Reconnecting"); lightColor[0] = 0xffffb454;
-            }, this::home));
-            connection.addView(retry, new LinearLayout.LayoutParams(dp(28.6f), dp(28.6f)));
+                if (android.animation.ValueAnimator.areAnimatorsEnabled()) spin.start();
+            }, () -> { spin.cancel(); retry.setRotation(0f); home(); }));
+            connection.addView(retry, new LinearLayout.LayoutParams(dp(30.03f), dp(30.03f)));
         }
         statusRow.addView(connection, new LinearLayout.LayoutParams(0, -2, 1));
         expanded.addView(statusRow);
