@@ -356,27 +356,29 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams headerSize = new LinearLayout.LayoutParams(-1, -2); headerSize.bottomMargin = dp(24);
         page.addView(header, headerSize);
         if (!title.equals("Home")) {
-            TextView heading = text(title); heading.setTextSize(28); heading.setTextColor(0xfff3f7f5);
+            boolean onboarding = title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
+                || title.equals("Name your wallet") || title.equals("Wallet created");
+            TextView heading;
+            if (onboarding) {
+                heading = new OnboardingTitleView(this); heading.setText(title);
+                heading.setLineSpacing(dp(3), 1f);
+                page.addView(heading, new LinearLayout.LayoutParams(-1, -2));
+            } else {
+                heading = text(title); heading.setTextColor(0xfff3f7f5);
+            }
+            heading.setTextSize(28);
             heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
             heading.setPadding(0, 0, 0, dp(20));
-            if (title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
-                || title.equals("Name your wallet") || title.equals("Wallet created")) revealOnboardingTitle(heading, title);
+            if (onboarding) revealOnboardingTitle((OnboardingTitleView) heading);
         }
     }
-    private void revealOnboardingTitle(TextView heading, String title) {
+    private void revealOnboardingTitle(OnboardingTitleView heading) {
         if (!android.animation.ValueAnimator.areAnimatorsEnabled()) return;
-        // Keep the full text laid out throughout, so buttons and wrapped lines never jump.
-        java.util.function.IntConsumer reveal = count -> {
-            android.text.SpannableString text = new android.text.SpannableString(title);
-            if (count < title.length()) text.setSpan(new android.text.style.ForegroundColorSpan(android.graphics.Color.TRANSPARENT),
-                count, title.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            heading.setText(text);
-        };
-        reveal.accept(0);
-        onboardingReveal = android.animation.ValueAnimator.ofInt(0, title.length());
+        heading.setReveal(0f);
+        onboardingReveal = android.animation.ValueAnimator.ofFloat(0f, 1f);
         onboardingReveal.setDuration(500);
         onboardingReveal.setInterpolator(new android.view.animation.LinearInterpolator());
-        onboardingReveal.addUpdateListener(frame -> reveal.accept((int) frame.getAnimatedValue()));
+        onboardingReveal.addUpdateListener(frame -> heading.setReveal((float) frame.getAnimatedValue()));
         onboardingReveal.start();
     }
     private void updateHeaderRate() {
