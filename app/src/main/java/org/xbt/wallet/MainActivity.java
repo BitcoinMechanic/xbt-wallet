@@ -874,18 +874,25 @@ public final class MainActivity extends Activity {
         if (index == 0) {
             balanceRow.addView(amount, amountSize);
         } else {
-            LinearLayout liquidity = new LinearLayout(this); liquidity.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout liquidity = new LinearLayout(this); liquidity.setOrientation(LinearLayout.VERTICAL);
             Button incoming = new Button(this); styleButton(incoming, false); incoming.setBackground(null);
             incoming.setTextColor(0xffb59b72); incoming.setOnClickListener(cycleUnits); balanceAmounts[2] = incoming;
-            for (Button value : new Button[]{amount, incoming}) {
-                value.setPadding(dp(2), dp(8), dp(2), dp(8));
-                value.setGravity(Gravity.CENTER); value.setMaxLines(2);
+            Button[] values = {amount, incoming};
+            String[] labels = {"Spendable", "Receivable"};
+            for (int i = 0; i < values.length; i++) {
+                LinearLayout line = new LinearLayout(this); line.setGravity(Gravity.CENTER_VERTICAL);
+                TextView caption = new TextView(this); caption.setText(labels[i]); caption.setTextSize(12);
+                caption.setTextColor(i == 0 ? 0xffa8efd5 : 0xffb59b72);
+                caption.setOnClickListener(cycleUnits);
+                line.addView(caption, new LinearLayout.LayoutParams(dp(76), -2));
+                Button value = values[i];
+                value.setPadding(dp(4), 0, dp(4), 0);
+                value.setMinHeight(0); value.setMinimumHeight(0);
+                value.setGravity(Gravity.END | Gravity.CENTER_VERTICAL); value.setMaxLines(1);
                 value.setAutoSizeTextTypeUniformWithConfiguration(8, 17, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+                line.addView(value, new LinearLayout.LayoutParams(0, dp(36), 1));
+                liquidity.addView(line, new LinearLayout.LayoutParams(-1, -2));
             }
-            liquidity.addView(amount, new LinearLayout.LayoutParams(0, dp(62.4f), 1));
-            TextView divider = new TextView(this); divider.setText("|"); divider.setTextSize(15); divider.setTextColor(0xff65716c);
-            divider.setPadding(dp(3), 0, dp(3), 0); liquidity.addView(divider);
-            liquidity.addView(incoming, new LinearLayout.LayoutParams(0, dp(62.4f), 1));
             balanceRow.addView(liquidity, amountSize);
         }
         LinearLayout.LayoutParams rowSize = new LinearLayout.LayoutParams(-1, -2); rowSize.topMargin = dp(8); rowSize.bottomMargin = dp(8);
@@ -921,12 +928,7 @@ public final class MainActivity extends Activity {
             if (balanceAmounts[i] != null) {
                 String value = BalanceDisplay.format(balanceSats[i], unit, code, price);
                 String label = i == 0 ? "On-chain balance" : i == 1 ? "Spendable" : "Receivable";
-                if (i == 0) balanceAmounts[i].setText(value);
-                else {
-                    android.text.SpannableString display = new android.text.SpannableString(label + "\n" + value);
-                    display.setSpan(new android.text.style.RelativeSizeSpan(.75f), 0, label.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                    balanceAmounts[i].setText(display);
-                }
+                balanceAmounts[i].setText(value);
                 balanceAmounts[i].setContentDescription(label + ": " + value + ". Tap to change units.");
             }
         }
