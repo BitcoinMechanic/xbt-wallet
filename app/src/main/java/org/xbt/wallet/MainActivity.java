@@ -12,6 +12,7 @@ import com.google.zxing.common.BitMatrix;
 
 import lnrpc.LightningOuterClass;
 import lnrpc.Stateservice;
+import offersrpc.OffersOuterClass;
 import java.util.*;
 
 /** Native alpha: all balances and operations come from the embedded XBT node. */
@@ -145,6 +146,8 @@ public final class MainActivity extends Activity {
             case "Open Channel": return this::coins;
             case "Send on chain": return this::sendOnChain;
             case "Receive Lightning": return this::receiveLightning;
+            case "Create BOLT12": return this::createBolt12;
+            case "BOLT12 offers": return this::bolt12Offers;
             case "Swap requests": return this::swapReceipts;
             case "Outgoing swaps": return this::outgoingSwaps;
             case "Pay Lightning": return this::payment;
@@ -391,7 +394,8 @@ public final class MainActivity extends Activity {
             boolean onboarding = title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
                 || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Starting...") || title.equals("Wallets")
                 || title.equals("Payment history") || title.equals("On chain funds") || title.equals("Channels")
-                || title.equals("Swap controllers") || title.equals("Advanced") || title.equals("Receive Lightning");
+                || title.equals("Swap controllers") || title.equals("Advanced") || title.equals("Receive Lightning")
+                || title.equals("Create BOLT12") || title.equals("BOLT12 offers") || title.equals("BOLT12 offer");
             TextView heading;
             if (onboarding) {
                 heading = new OnboardingTitleView(this); heading.setText(title);
@@ -1197,7 +1201,9 @@ public final class MainActivity extends Activity {
         channels.addView(card, new LinearLayout.LayoutParams(-1, -2));
     }
     private void animateChannelsSection(LinearLayout channels, boolean show) {
-        String key = "channels-section";
+        animateExpandable("channels-section", channels, show);
+    }
+    private void animateExpandable(String key, LinearLayout channels, boolean show) {
         android.animation.ValueAnimator previous = channelExpansions.remove(key);
         if (previous != null) previous.cancel();
         int start = channels.getVisibility() == View.GONE ? 0 : channels.getHeight();
@@ -2027,7 +2033,81 @@ public final class MainActivity extends Activity {
         button(node != null && node.isRemote() ? "Node backup" : "Back up seed", this::backup);
         if (node == null || !node.isRemote()) button("Test recovery", this::testRecovery);
         button("Peers", this::peerList);
+        button("Create BOLT12", this::createBolt12);
         button("Closed-channel history", this::closedChannels); button("Home", this::home);
+    }
+    private void createBolt12() {
+        page("Create BOLT12");
+        text("Create a reusable XBT offer. Keep the wallet online so it can answer invoice requests. This offer has no expiration.");
+        AmountEntry amount = new AmountEntry("Amount", "Optional - payer chooses if blank");
+        text("Description"); EditText description = field("Optional - payer can see this", "");
+        text("Issuer"); EditText issuer = field("Optional - payer can see this", "");
+        text("Label"); EditText label = field("Optional - for your own records", "");
+        LinearLayout form = page;
+        button("Create BOLT12", () -> {
+            final OffersOuterClass.CreateOfferRequest request;
+            try {
+                long sats = amount.input.getText().toString().trim().isEmpty() ? 0 : amount.sats();
+                String memo = description.getText().toString().trim();
+                if (sats > 0 && memo.isEmpty()) throw new Exception("A description is required for a fixed-amount BOLT12 offer.");
+                request = OffersOuterClass.CreateOfferRequest.newBuilder().setAmountMsat(Math.multiplyExact(sats, 1000))
+                    .setDescription(memo).setIssuer(issuer.getText().toString().trim()).setLabel(label.getText().toString().trim()).build();
+            } catch (Exception e) { error(e); return; }
+            work(() -> {
+                OffersOuterClass.CreateOfferResponse result = OffersOuterClass.CreateOfferResponse.parseFrom(node.rpc("offersCreateOffer", request));
+                if (!result.hasOffer() || !result.getOffer().getBolt12().startsWith("lno1"))
+                    throw new Exception("The node did not return a BOLT12 offer. Check saved offers before trying again.");
+                runOnUiThread(() -> {
+                    if (page == form) showBolt12(result.getOffer());
+                    else Toast.makeText(this, "BOLT12 created. Find it under Advanced → Create BOLT12 → Saved offers.", Toast.LENGTH_LONG).show();
+                });
+            });
+        });
+        button("Saved offers", this::bolt12Offers);
+        button("Back", this::advanced);
+    }
+    private void bolt12Offers() {
+        page("BOLT12 offers");
+        LinearLayout target = page;
+        work(() -> {
+            OffersOuterClass.ListOffersResponse result = OffersOuterClass.ListOffersResponse.parseFrom(
+                node.rpc("offersListOffers", OffersOuterClass.ListOffersRequest.getDefaultInstance()));
+            runOnUiThread(() -> {
+                if (page != target) return;
+                for (OffersOuterClass.Offer offer : result.getOffersList()) {
+                    String label = offer.getLabel().isEmpty() ? offer.getDescription() : offer.getLabel();
+                    if (label.isEmpty()) label = "BOLT12 offer";
+                    button(label + " · " + (offer.getActive() ? "Active" : "Inactive"), () -> showBolt12(offer));
+                }
+                if (result.getOffersCount() == 0) text("No saved offers yet.");
+                button("Back", this::createBolt12);
+            });
+        });
+    }
+    private void showBolt12(OffersOuterClass.Offer offer) {
+        page("BOLT12 offer", false, () -> showBolt12(offer));
+        if (!offer.getLabel().isEmpty()) text(offer.getLabel());
+        text(offer.getAmountMsat() == 0 ? "Payer chooses the amount" : amountReview(offer.getAmountMsat(), amountPrice()));
+        if (!offer.getDescription().isEmpty()) text(offer.getDescription());
+        text(offer.getActive() ? "Reusable offer · Keep the wallet online" : "This offer is inactive");
+        try {
+            BitMatrix matrix = new MultiFormatWriter().encode(offer.getBolt12(), BarcodeFormat.QR_CODE, 640, 640);
+            Bitmap bitmap = Bitmap.createBitmap(640, 640, Bitmap.Config.ARGB_8888);
+            for (int y = 0; y < 640; y++) for (int x = 0; x < 640; x++) bitmap.setPixel(x, y, matrix.get(x, y) ? 0xff000000 : 0x00000000);
+            ImageView qr = new ImageView(this); qr.setImageBitmap(bitmap); qr.setContentDescription("BOLT12 offer QR code");
+            addQrFrame(qr, Math.round((getResources().getDisplayMetrics().widthPixels - 56) * UI_SCALE));
+        } catch (Exception e) { text("Could not render QR code: " + e.getMessage()); }
+        button("Copy offer", () -> {
+            getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("BOLT12 offer", offer.getBolt12()));
+            Toast.makeText(this, "Offer copied", Toast.LENGTH_SHORT).show();
+        });
+        text(offer.getBolt12());
+        if (offer.getActive()) button("Disable offer", () -> confirmAction("Disable this offer?",
+            "The node will stop issuing new invoices for this offer. Already-issued invoices are unaffected.", "Disable", () -> work(() -> {
+                node.rpc("offersDisableOffer", OffersOuterClass.DisableOfferRequest.newBuilder().setOfferId(offer.getOfferId()).build());
+                runOnUiThread(() -> showBolt12(offer.toBuilder().setActive(false).build()));
+            })));
+        button("Back", this::createBolt12);
     }
     private void nodeConnection() {
         page("Node connection");
@@ -2620,6 +2700,56 @@ public final class MainActivity extends Activity {
         LightningOuterClass.WalletBalanceResponse wallet = LightningOuterClass.WalletBalanceResponse.parseFrom(node.rpc("walletBalance", LightningOuterClass.WalletBalanceRequest.getDefaultInstance()));
         return onChainPreview(chosen, available, wallet, address, amount, rate, max);
     }
+    private final class ExpirationEntry {
+        final EditText count;
+        int unit;
+        ExpirationEntry() {
+            unit = prefs.getInt("receive-expiration-unit", 2);
+            if (unit < 0 || unit >= InvoiceExpiration.UNITS.length) unit = 2;
+            LinearLayout fields = new LinearLayout(MainActivity.this);
+            fields.setGravity(Gravity.CENTER_VERTICAL);
+            final boolean[] expanded = {false};
+            Button toggle = button("Expiration (default 1hr) ▾", () -> {});
+            toggle.setBackground(null); toggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            count = field("Number", prefs.getString("receive-expiration-count", "1"));
+            page.removeView(count);
+            count.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+            count.setContentDescription("Expiration number");
+            fields.addView(count, new LinearLayout.LayoutParams(0, -2, 1));
+            Button timeframe = new Button(MainActivity.this); styleButton(timeframe, false);
+            timeframe.setText(InvoiceExpiration.UNITS[unit] + " ▾");
+            timeframe.setContentDescription("Expiration time frame");
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(0, -2, 1); size.leftMargin = dp(8);
+            fields.addView(timeframe, size);
+            fields.setVisibility(View.GONE); fields.setAlpha(0f);
+            page.addView(fields, new LinearLayout.LayoutParams(-1, -2));
+            Runnable update = () -> {
+                String summary;
+                try { long seconds = seconds(); summary = seconds == 3600 ? "default 1hr" : InvoiceExpiration.describe(seconds); }
+                catch (IllegalArgumentException e) { summary = "set duration"; }
+                toggle.setText("Expiration (" + summary + ") " + (expanded[0] ? "▴" : "▾"));
+            };
+            toggle.setOnClickListener(v -> {
+                expanded[0] = !expanded[0];
+                animateExpandable("invoice-expiration", fields, expanded[0]);
+                update.run();
+            });
+            timeframe.setOnClickListener(v -> new WalletDialogBuilder().setTitle("Time frame")
+                .setSingleChoiceItems(InvoiceExpiration.UNITS, unit, (dialog, which) -> {
+                    unit = which; prefs.edit().putInt("receive-expiration-unit", unit).apply();
+                    timeframe.setText(InvoiceExpiration.UNITS[unit] + " ▾"); update.run(); dialog.dismiss();
+                }).setNegativeButton("Cancel", null).show());
+            count.addTextChangedListener(new android.text.TextWatcher() {
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    prefs.edit().putString("receive-expiration-count", s.toString()).apply(); update.run();
+                }
+                public void afterTextChanged(android.text.Editable value) {}
+            });
+            update.run();
+        }
+        long seconds() { return InvoiceExpiration.seconds(count.getText().toString(), unit); }
+    }
     private void receiveLightning() {
         page("Receive Lightning");
         TextView receiveLimit = text("Checking incoming liquidity…");
@@ -2669,6 +2799,7 @@ public final class MainActivity extends Activity {
         EditText privateLabel = labelField(""); setFieldHint(privateLabel, "Optional - for your own records");
         privateLabel.setSingleLine(false); privateLabel.setMaxLines(3);
         privateLabel.setContentDescription("Label Optional - for your own records");
+        ExpirationEntry expiration = new ExpirationEntry();
         Button controller = button("Select swap controller", () -> {
             try {
                 org.json.JSONArray saved = savedControllers(); java.util.List<org.json.JSONObject> available = new ArrayList<>();
@@ -2698,8 +2829,9 @@ public final class MainActivity extends Activity {
         });
         swaps.setChecked(prefs.getBoolean("receive-lightning-swaps", false));
         button("Create invoice", () -> {
-            final long sats;
+            final long sats, expirySeconds;
             try {
+                expirySeconds = expiration.seconds();
                 String entered = amount.getText().toString().trim();
                 sats = entered.isEmpty() ? 0 : entry.sats();
                 if (swaps.isChecked() && sats == 0) throw new Exception("Enter the XBT amount to receive through the swap.");
@@ -2707,10 +2839,10 @@ public final class MainActivity extends Activity {
             catch (Exception e) { error(e); return; }
             final String description = memo.getText().toString().trim();
             final String invoiceLabel = privateLabel.getText().toString().trim();
-            if (swaps.isChecked()) { createSwapReceive(sats, description, invoiceLabel); return; }
+            if (swaps.isChecked()) { createSwapReceive(sats, description, invoiceLabel, expirySeconds); return; }
             work(() -> {
                 LightningOuterClass.AddInvoiceResponse result = LightningOuterClass.AddInvoiceResponse.parseFrom(node.rpc("addInvoice",
-                    LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(3600).setPrivate(true).build()));
+                    LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(expirySeconds).setPrivate(true).build()));
                 if (!prefs.edit().putString("invoice-label-" + android.util.Base64.encodeToString(result.getRHash().toByteArray(), android.util.Base64.NO_WRAP), invoiceLabel).commit())
                     throw new Exception("Could not save invoice label.");
                 String invoice = result.getPaymentRequest();
@@ -2719,7 +2851,7 @@ public final class MainActivity extends Activity {
                 for (int y = 0; y < 640; y++) for (int x = 0; x < 640; x++) bitmap.setPixel(x, y, matrix.get(x,y) ? 0xff000000 : 0x00000000);
                 runOnUiThread(() -> {
                     receivingInvoiceHash = result.getRHash();
-                    page("Lightning invoice"); text((sats == 0 ? "Sender chooses the amount" : displayAmount(sats)) + " · Expires in 1 hour");
+                    page("Lightning invoice"); text((sats == 0 ? "Sender chooses the amount" : displayAmount(sats)) + " · Expires in " + InvoiceExpiration.describe(expirySeconds));
                     ImageView qr = new ImageView(this); qr.setImageBitmap(bitmap); qr.setContentDescription("Lightning invoice QR code");
                     addQrFrame(qr, Math.round((getResources().getDisplayMetrics().widthPixels - 56) * UI_SCALE));
                     button("Copy invoice", () -> {
@@ -2873,7 +3005,7 @@ public final class MainActivity extends Activity {
             })));
         });
     }
-    private void createSwapReceive(long sats, String description, String label) {
+    private void createSwapReceive(long sats, String description, String label, long expirySeconds) {
         work(() -> {
             String provider = prefs.getString("receive-provider", ""), api=prefs.getString("receive-api-"+provider,""), key=prefs.getString("receive-key-"+provider,"");
             if (api.isEmpty() || key.isEmpty()) throw new Exception("Select a controller and configure its Wallet Swap Access first.");
@@ -2884,7 +3016,7 @@ public final class MainActivity extends Activity {
                     throw new Exception("A swap request is still pending. Open Swap requests to resume it before creating another.");
             }
             LightningOuterClass.AddInvoiceResponse result=LightningOuterClass.AddInvoiceResponse.parseFrom(node.rpc("addInvoice",
-                LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(3600).setPrivate(true).build()));
+                LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(expirySeconds).setPrivate(true).build()));
             String hash=SwapReceive.hash(result.getRHash().toByteArray());
             org.json.JSONObject record=new org.json.JSONObject().put("hash",hash).put("invoice",result.getPaymentRequest()).put("sats",sats)
                 .put("provider",provider).put("api",api).put("environment",prefs.getString("network","regtest")).put("created",System.currentTimeMillis());

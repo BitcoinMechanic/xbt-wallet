@@ -3,6 +3,7 @@ package org.xbt.wallet;
 import org.json.*;
 import com.google.protobuf.*;
 import lnrpc.LightningOuterClass.*;
+import offersrpc.OffersOuterClass;
 import java.math.BigInteger;
 import java.util.*;
 
@@ -39,6 +40,12 @@ final class ClnRemote {
     static String hex(ByteString bytes) { StringBuilder s=new StringBuilder(); for(byte b:bytes.toByteArray())s.append(String.format(java.util.Locale.ROOT,"%02x",b&255)); return s.toString(); }
     static JSONArray array(JSONObject value,String key) { JSONArray a=value.optJSONArray(key); return a==null?new JSONArray():a; }
     private JSONArray channels() throws Exception { return array(call("listpeerchannels"),"channels"); }
+    private static OffersOuterClass.Offer remoteOffer(JSONObject item) throws Exception {
+        String bolt12=item.getString("bolt12"); ByteString id=bytes(item.getString("offer_id"));
+        if(!bolt12.startsWith("lno1") || id.size()!=32)throw new Exception("The node returned an invalid BOLT12 offer response.");
+        return OffersOuterClass.Offer.newBuilder().setBolt12(bolt12).setOfferId(id)
+            .setActive(item.getBoolean("active")).setLabel(item.optString("label")).build();
+    }
     private int height() throws Exception { return call("getinfo").getInt("blockheight"); }
     static int confirmations(JSONObject output,int height) { int h=output.optInt("blockheight",0); return h>0 ? Math.max(0,height-h+1):0; }
     private static String point(JSONObject c) { return c.optString("funding_txid","")+":"+c.optInt("funding_outnum",0); }
@@ -46,6 +53,43 @@ final class ClnRemote {
     private static JSONArray points(List<OutPoint> points) { JSONArray a=new JSONArray(); for(OutPoint p:points) a.put(p.getTxidStr()+":"+p.getOutputIndex()); return a; }
     byte[] rpc(String method, MessageLite request) throws Exception {
         switch(method) {
+        case "offersCreateOffer": {
+            OffersOuterClass.CreateOfferRequest r=(OffersOuterClass.CreateOfferRequest)request;
+            JSONObject args=new JSONObject().put("amount",r.getAmountMsat()==0 ? "any" : r.getAmountMsat()+"msat");
+            if(!r.getDescription().isEmpty())args.put("description",r.getDescription());
+            if(!r.getIssuer().isEmpty())args.put("issuer",r.getIssuer());
+            if(!r.getLabel().isEmpty())args.put("label",r.getLabel());
+            if(r.getAbsoluteExpiry()>0)args.put("absolute_expiry",r.getAbsoluteExpiry());
+            JSONObject result=call("offer",args);
+            OffersOuterClass.Offer offer=remoteOffer(result).toBuilder().setAmountMsat(r.getAmountMsat())
+                .setDescription(r.getDescription()).setIssuer(r.getIssuer()).setLabel(r.getLabel())
+                .setAbsoluteExpiry(r.getAbsoluteExpiry()).build();
+            return OffersOuterClass.CreateOfferResponse.newBuilder().setOffer(offer).setCreated(result.optBoolean("created")).build().toByteArray();
+        }
+        case "offersListOffers": {
+            OffersOuterClass.ListOffersRequest r=(OffersOuterClass.ListOffersRequest)request;
+            JSONObject args=new JSONObject(); if(r.getActiveOnly())args.put("active_only",true);
+            JSONArray offers=array(call("listoffers",args),"offers");
+            OffersOuterClass.ListOffersResponse.Builder result=OffersOuterClass.ListOffersResponse.newBuilder();
+            for(int n=0;n<offers.length();n++) {
+                JSONObject item=offers.getJSONObject(n);
+                // CLN listoffers omits amount/description; decode its actual offer.
+                JSONObject decoded=call("decode",new JSONObject().put("string",item.getString("bolt12")));
+                if(!decoded.optBoolean("valid") || !decoded.optString("type").equals("bolt12 offer")
+                    || !decoded.optString("offer_id").equals(item.getString("offer_id")))
+                    throw new Exception("The node could not validate its saved BOLT12 offer.");
+                if(decoded.has("offer_currency"))throw new Exception("Fiat-denominated BOLT12 offers are not supported by this wallet.");
+                result.addOffers(remoteOffer(item).toBuilder().setAmountMsat(msat(decoded,"offer_amount_msat"))
+                    .setDescription(decoded.optString("offer_description")).setIssuer(decoded.optString("offer_issuer"))
+                    .setAbsoluteExpiry(decoded.optLong("offer_absolute_expiry")));
+            }
+            return result.build().toByteArray();
+        }
+        case "offersDisableOffer": {
+            OffersOuterClass.DisableOfferRequest r=(OffersOuterClass.DisableOfferRequest)request;
+            call("disableoffer",new JSONObject().put("offer_id",hex(r.getOfferId())));
+            return OffersOuterClass.DisableOfferResponse.getDefaultInstance().toByteArray();
+        }
         case "getInfo": {
             JSONObject i=call("getinfo"); if(!i.getString("id").equals(identity)) throw new Exception("Remote node identity changed.");
             return GetInfoResponse.newBuilder().setIdentityPubkey(identity).setAlias(i.optString("alias"))

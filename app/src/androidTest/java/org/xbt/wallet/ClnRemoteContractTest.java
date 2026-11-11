@@ -8,6 +8,43 @@ import routerrpc.RouterOuterClass;
 /** Mutation contracts use a fake transport; never sends funds or changes any node. */
 public class ClnRemoteContractTest {
     private static final String HASH="ab".repeat(32), ID="02"+"cd".repeat(32);
+    @Test public void bolt12CreationListingAndDisableUseNativeOfferRpc() throws Exception {
+        java.util.List<String> calls=new java.util.ArrayList<>();
+        ClnRemote node=new ClnRemote((method,args)->{
+            calls.add(method);
+            JSONObject offer=new JSONObject().put("offer_id",HASH).put("bolt12","lno1fixture").put("active",true).put("created",true).put("label","Private label");
+            switch(method) {
+            case "offer":
+                assertEquals("500000msat",args.getString("amount")); assertEquals("Coffee",args.getString("description"));
+                assertEquals("Private label",args.getString("label")); assertEquals("Shop",args.getString("issuer"));
+                assertFalse(args.has("absolute_expiry")); return offer;
+            case "listoffers":return new JSONObject().put("offers",new JSONArray().put(offer));
+            case "decode":return new JSONObject().put("valid",true).put("type","bolt12 offer").put("offer_id",HASH)
+                .put("offer_amount_msat","500000msat").put("offer_description","Coffee").put("offer_issuer","Shop");
+            case "disableoffer":assertEquals(HASH,args.getString("offer_id"));return new JSONObject();
+            default:throw new AssertionError(method);
+            }
+        },"mainnet",ID);
+        offersrpc.OffersOuterClass.CreateOfferResponse created=offersrpc.OffersOuterClass.CreateOfferResponse.parseFrom(node.rpc("offersCreateOffer",
+            offersrpc.OffersOuterClass.CreateOfferRequest.newBuilder().setAmountMsat(500000).setDescription("Coffee").setIssuer("Shop").setLabel("Private label").build()));
+        assertEquals(500000,created.getOffer().getAmountMsat());assertTrue(created.getCreated());
+        offersrpc.OffersOuterClass.ListOffersResponse listed=offersrpc.OffersOuterClass.ListOffersResponse.parseFrom(node.rpc("offersListOffers",offersrpc.OffersOuterClass.ListOffersRequest.getDefaultInstance()));
+        assertEquals("Coffee",listed.getOffers(0).getDescription());assertEquals(500000,listed.getOffers(0).getAmountMsat());
+        node.rpc("offersDisableOffer",offersrpc.OffersOuterClass.DisableOfferRequest.newBuilder().setOfferId(created.getOffer().getOfferId()).build());
+        assertEquals(java.util.Arrays.asList("offer","listoffers","decode","disableoffer"),calls);
+    }
+    @Test public void amountlessOfferAndCustomInvoiceExpirationArePreserved() throws Exception {
+        ClnRemote node=new ClnRemote((method,args)->{
+            if(method.equals("offer")) {
+                assertEquals("any",args.getString("amount"));
+                return new JSONObject().put("offer_id",HASH).put("bolt12","lno1fixture").put("active",true).put("created",true);
+            }
+            assertEquals("invoice",method); assertEquals(432000,args.getLong("expiry"));
+            return new JSONObject().put("bolt11","fixture").put("payment_hash",HASH);
+        },"mainnet",ID);
+        node.rpc("offersCreateOffer",offersrpc.OffersOuterClass.CreateOfferRequest.getDefaultInstance());
+        node.rpc("addInvoice",Invoice.newBuilder().setExpiry(InvoiceExpiration.seconds("5",3)).build());
+    }
     @Test public void invoiceAndPaymentPreserveUnitsAndFeeLimit() throws Exception {
         ClnRemote node=new ClnRemote((method,args)->{
             if(method.equals("invoice")){
