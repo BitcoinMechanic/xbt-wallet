@@ -391,7 +391,7 @@ public final class MainActivity extends Activity {
             boolean onboarding = title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
                 || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Starting...") || title.equals("Wallets")
                 || title.equals("Payment history") || title.equals("On chain funds") || title.equals("Channels")
-                || title.equals("Swap controllers") || title.equals("Advanced");
+                || title.equals("Swap controllers") || title.equals("Advanced") || title.equals("Receive Lightning");
             TextView heading;
             if (onboarding) {
                 heading = new OnboardingTitleView(this); heading.setText(title);
@@ -2663,11 +2663,13 @@ public final class MainActivity extends Activity {
         controller.setVisibility(View.GONE);
         Button receipts = button("Swap requests", this::swapReceipts); receipts.setVisibility(View.GONE);
         swaps.setOnCheckedChangeListener((v,enabled) -> {
+            prefs.edit().putBoolean("receive-lightning-swaps", enabled).apply();
             amountTitle.setText("Amount");
             setFieldHint(amount, enabled ? "Required for swaps" : "Optional");
             setFieldHint(memo, enabled ? "Optional - for your XBT invoice" : "Optional - sender can see this");
             controller.setVisibility(enabled ? View.VISIBLE : View.GONE); receipts.setVisibility(enabled ? View.VISIBLE : View.GONE);
         });
+        swaps.setChecked(prefs.getBoolean("receive-lightning-swaps", false));
         button("Create invoice", () -> {
             final long sats;
             try {
