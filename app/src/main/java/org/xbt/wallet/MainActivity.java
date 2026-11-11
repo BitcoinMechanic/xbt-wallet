@@ -626,6 +626,7 @@ public final class MainActivity extends Activity {
             TextView balances = new TextView(this);
             balances.setText((side == 0 ? "Local: " : "Remote: ") + displayAmount(value));
             balances.setTextSize(12.6f); balances.setTextColor(0xffafbeb6);
+            balances.setGravity(side == 0 ? Gravity.START : Gravity.END);
             balances.setTag(new long[]{value, side}); homeChannelBalances.add(balances);
             balanceRow.addView(balances, new LinearLayout.LayoutParams(0, -2, 1));
         }
@@ -635,6 +636,7 @@ public final class MainActivity extends Activity {
         statusRow.addView(statusTitle, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout connection = new LinearLayout(this); connection.setGravity(Gravity.CENTER_VERTICAL);
         TextView statusText = new TextView(this); statusText.setText(status); statusText.setTextSize(12.6f); statusText.setTextColor(0xffafbeb6);
+        statusText.setGravity(Gravity.END);
         connection.addView(statusText, new LinearLayout.LayoutParams(0, -2, 1));
         if (disconnected) {
             Button retry = new Button(this); styleButton(retry, false); retry.setText("↻"); retry.setTextSize(20);
