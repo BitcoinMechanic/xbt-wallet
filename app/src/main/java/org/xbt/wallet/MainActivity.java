@@ -291,7 +291,15 @@ public final class MainActivity extends Activity {
             v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
             return insets;
         });
-        scroll.addView(page); setContentView(scroll);
+        LinearLayout setupContainer = null;
+        if (WalletProfiles.isDraft(this, profile) && !WalletProfiles.hasPendingDeletion(this)) {
+            // Keep the cancel footer after the form as its controls are appended.
+            setupContainer = new LinearLayout(this); setupContainer.setOrientation(LinearLayout.VERTICAL);
+            page.setPadding(dp(20), dp(24), dp(20), dp(8));
+            setupContainer.addView(page, new LinearLayout.LayoutParams(-1, -2));
+            scroll.addView(setupContainer);
+        } else scroll.addView(page);
+        setContentView(scroll);
         if (headerSlideAnimation != null) headerSlideAnimation.cancel();
         headerSlideAnimation = null;
         headerSlide = prefs.getBoolean("header-fiat-rate", false) ? 1f : 0f;
@@ -397,8 +405,13 @@ public final class MainActivity extends Activity {
             heading.setPadding(0, 0, 0, dp(20));
             if (onboarding) revealOnboardingTitle((OnboardingTitleView) heading);
         }
-        if (WalletProfiles.isDraft(this, profile) && !WalletProfiles.hasPendingDeletion(this))
-            button("Cancel setup", this::cancelWalletSetup);
+        if (setupContainer != null) {
+            Button cancel = button("Cancel setup", this::cancelWalletSetup);
+            page.removeView(cancel);
+            LinearLayout.LayoutParams footer = new LinearLayout.LayoutParams(-1, -2);
+            footer.setMargins(dp(20), dp(5), dp(20), dp(32));
+            setupContainer.addView(cancel, footer);
+        }
     }
     private void revealOnboardingTitle(OnboardingTitleView heading) {
         if (!android.animation.ValueAnimator.areAnimatorsEnabled()) return;
@@ -778,8 +791,8 @@ public final class MainActivity extends Activity {
             if (clip == null || clip.getItemCount() == 0) { error(new Exception("The clipboard is empty.")); return; }
             importConfig.accept(clip.getItemAt(0).coerceToText(this).toString());
         });
-        page.removeView(scanConnection); page.addView(scanConnection, WalletProfiles.isDraft(this, profile) ? 5 : 4);
-        page.removeView(pasteConnection); page.addView(pasteConnection, WalletProfiles.isDraft(this, profile) ? 6 : 5);
+        page.removeView(scanConnection); page.addView(scanConnection, 4);
+        page.removeView(pasteConnection); page.addView(pasteConnection, 5);
         TextView status = text("");
         button("Test and connect", () -> {
             if (busy) return;
