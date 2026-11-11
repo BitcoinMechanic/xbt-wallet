@@ -22,6 +22,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.xbt.wallet.ios
         INFOPLIST_FILE: XBTWallet/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         OTHER_LDFLAGS: ['$(inherited)', '-lresolv']
     scheme:
       testTargets: [XBTWalletTests, XBTWalletUITests]

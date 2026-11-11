@@ -56,9 +56,6 @@ struct RootView: View {
                         Text(wallet.status).multilineTextAlignment(.center).foregroundStyle(.secondary)
                         Text("Keep the app open while the XBT node synchronizes. iOS suspends the node when the app is in the background.")
                             .font(.footnote).foregroundStyle(.secondary)
-                        if wallet.phase == .syncing {
-                            Button("Back up seed") { showSeed = true }
-                        }
                     }
                 case .failed:
                     Page(title: "Unable to start") {

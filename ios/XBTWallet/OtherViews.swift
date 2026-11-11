@@ -42,6 +42,11 @@ struct HistoryView: View {
                 result.append(HistoryRow(id: tx.text("tx_hash"), kind: "On Chain", amount: tx.int("amount"), status: tx.int("num_confirmations") > 0 ? "Confirmed" : "Unconfirmed", label: tx.text("label"), date: Date(timeIntervalSince1970: Double(tx.int("time_stamp")))))
             }
             for payment in try await wallet.rpc.call("listPayments", ["include_incomplete": true, "max_payments": "200", "reversed": true]).array("payments") {
+                if let store = wallet.store, ["SUCCEEDED", "FAILED"].contains(payment.text("status")) {
+                    for attempt in store.attempts where attempt.kind == "lightning" && attempt.reference == payment.text("payment_hash") && attempt.state == "pending" {
+                        try store.finish(attempt.id, state: payment.text("status") == "SUCCEEDED" ? "succeeded" : "failed", result: payment.text("failure_reason"))
+                    }
+                }
                 result.append(HistoryRow(id: payment.text("payment_hash"), kind: "Lightning", amount: -payment.int("value_sat"), status: payment.text("status"), label: "Sent", date: Date(timeIntervalSince1970: Double(payment.int("creation_time_ns")) / 1e9)))
             }
             for invoice in try await wallet.rpc.call("listInvoices", ["num_max_invoices": "200", "reversed": true]).array("invoices") where invoice.bool("settled") {

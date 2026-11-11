@@ -91,6 +91,9 @@ final class NativeRPC {
         return AsyncThrowingStream { continuation in
             let callback = StreamCallback(continuation)
             DispatchQueue.global(qos: .userInitiated).async { LndmobileJSONStream(method, input, callback) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 120) {
+                continuation.finish(throwing: WalletError("\(method) did not return a final result within 120 seconds. It may still complete in the node. Check history before retrying."))
+            }
         }
     }
 }

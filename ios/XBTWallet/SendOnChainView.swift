@@ -17,6 +17,10 @@ struct SendOnChainView: View {
     @State private var txid = ""
     @State private var scan = false
     @State private var estimateTask: Task<Void, Never>?
+    @State private var reviewedParams: [String: Any] = [:]
+    @State private var reviewedReference = ""
+    @State private var reviewedRecipient: Int64 = 0
+    @State private var reviewedFee: Int64 = 0
     var selectedOutputs: [Reply] { outputs.filter { selected.contains($0.outputID) } }
     var selectedTotal: Int64 { selectedOutputs.reduce(0) { $0 + $1.int("amount_sat") } }
     var sats: Int64 { (try? Amounts.parse(amount, unit: wallet.unit, usdRate: wallet.currentRate)) ?? 0 }
@@ -68,6 +72,13 @@ struct SendOnChainView: View {
                         wallet.error = "Enter an address, amount and positive fee rate."; return
                     }
                     guard estimatedFee != nil else { wallet.error = "Wait for a valid network fee estimate."; return }
+                    var params: [String: Any] = ["addr": address, "sat_per_vbyte": rate, "label": label, "min_confs": 1, "spend_unconfirmed": false]
+                    if entire { params["send_all"] = true } else { params["amount"] = String(sats) }
+                    if !selected.isEmpty { params["outpoints"] = inputPoints }
+                    reviewedParams = params
+                    reviewedReference = "\(address)|\(entire ? "all" : String(sats))|\(selected.sorted())"
+                    reviewedFee = estimatedFee ?? 0
+                    reviewedRecipient = entire ? max(0, selectedTotal - reviewedFee) : sats
                     review = true
                 }.buttonStyle(WalletButton()).disabled(wallet.busy)
             }
@@ -90,17 +101,13 @@ struct SendOnChainView: View {
             NavigationStack {
                 Page(title: "Review transaction") {
                     Text(address).font(.footnote).textSelection(.enabled)
-                    Text("Recipient: \((entire ? max(0, selectedTotal - (estimatedFee ?? 0)) : sats).formatted()) sats")
-                    Text("Estimated fee: \((estimatedFee ?? 0).formatted()) sats · \(rate) sats/vByte")
+                    Text("Recipient: \(reviewedRecipient.formatted()) sats")
+                    Text("Estimated fee: \(reviewedFee.formatted()) sats · \(rate) sats/vByte")
                     Text("XBT mainnet").font(.caption)
                     Button("Send") {
                         review = false
                         wallet.perform {
-                            var params: [String: Any] = ["addr": address, "sat_per_vbyte": rate, "label": label, "min_confs": 1, "spend_unconfirmed": false]
-                            if entire { params["send_all"] = true } else { params["amount"] = String(sats) }
-                            if !selected.isEmpty { params["outpoints"] = inputPoints }
-                            let reference = "\(address)|\(entire ? "all" : String(sats))|\(selected.sorted())"
-                            txid = try await wallet.sendCoins(params: params, reference: reference)
+                            txid = try await wallet.sendCoins(params: reviewedParams, reference: reviewedReference)
                             if !label.isEmpty { UserDefaults.standard.set(label, forKey: "label." + txid) }
                         }
                     }.buttonStyle(WalletButton())

@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [ios-port]
-    paths: ['ios/**', 'scripts/build-ios*', 'patches/**', '.github/workflows/ios.yml']
+    paths: ['ios/**', 'scripts/build-ios*', 'scripts/render-ios-icon.swift', 'patches/**', '.github/workflows/ios.yml']
 permissions:
   contents: read
 jobs:
@@ -33,7 +33,9 @@ jobs:
           retention-days: 7
       - name: Generate Xcode project
         working-directory: ios
-        run: xcodegen generate
+        run: |
+          swift ../scripts/render-ios-icon.swift XBTWallet/Resources/xbt_logo.png XBTWallet/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+          xcodegen generate
       - name: Compile unsigned iPhone app
         working-directory: ios
         run: xcodebuild -project XBTWallet.xcodeproj -scheme XBTWallet -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO build

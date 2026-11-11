@@ -11,6 +11,8 @@ struct PayLightningView: View {
     @State private var scanning = false
     @State private var review = false
     @State private var succeeded = false
+    @State private var reviewedSats: Int64 = 0
+    @State private var reviewedRate: Decimal?
     var sats: Int64 {
         let fixed = decoded?.int("num_satoshis") ?? 0
         return fixed > 0 ? fixed : ((try? Amounts.parse(amount, unit: wallet.unit, usdRate: wallet.currentRate)) ?? 0)
@@ -19,7 +21,7 @@ struct PayLightningView: View {
         Page(title: succeeded ? "Payment sent" : "Pay Lightning") {
             if succeeded {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 64)).foregroundStyle(Palette.green)
-                Text(wallet.display(sats))
+                Text(wallet.display(reviewedSats))
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Invoice").foregroundStyle(Palette.rope).font(.subheadline)
@@ -47,7 +49,7 @@ struct PayLightningView: View {
                 Field(title: "Label", placeholder: "Optional", text: $label)
                 Button("Review invoice") {
                     guard sats > 0 else { wallet.error = "Enter a payment amount."; return }
-                    review = true
+                    reviewedSats = sats; reviewedRate = wallet.currentRate; review = true
                 }.buttonStyle(WalletButton()).disabled(decoded == nil || wallet.busy)
             }
         }
@@ -60,14 +62,14 @@ struct PayLightningView: View {
             NavigationStack {
                 Page(title: "Review invoice") {
                     ForEach(AmountUnit.allCases, id: \.self) { unit in
-                        Text(Amounts.format(sats, unit: unit, usdRate: wallet.currentRate)).foregroundStyle(Palette.rope)
+                        Text(Amounts.format(reviewedSats, unit: unit, usdRate: reviewedRate)).foregroundStyle(Palette.rope)
                     }
-                    Text("Maximum routing fee: \(max(1, sats / 100).formatted()) sats")
+                    Text("Maximum routing fee: \(max(1, reviewedSats / 100).formatted()) sats")
                     Text("XBT mainnet").font(.caption)
                     Button("Pay invoice") {
                         review = false
                         wallet.perform {
-                            _ = try await wallet.pay(invoice: invoice, amount: sats, label: label)
+                            _ = try await wallet.pay(invoice: invoice, amount: reviewedSats, label: label)
                             succeeded = true
                             try await wallet.refresh()
                         }
