@@ -137,8 +137,8 @@ public final class MainActivity extends Activity {
     private final boolean[] homeActionsExpanded = new boolean[2];
     private final LinearLayout[] homeActionsViews = new LinearLayout[2];
     private final android.animation.ValueAnimator[] homeActionsAnimation = new android.animation.ValueAnimator[2];
-    private final Button[] balanceAmounts = new Button[2];
-    private final long[] balanceSats = new long[2];
+    private final Button[] balanceAmounts = new Button[3];
+    private final long[] balanceSats = new long[3];
     private boolean ratesLoading;
     private long lastRatesAttempt;
     private org.json.JSONObject fiatRates;
@@ -559,11 +559,13 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 if (!screen.equals(origin) || walletPopup != null || !channelExpansions.isEmpty() || (headerSlideAnimation != null && headerSlideAnimation.isRunning()) || ((homeActionsAnimation[0] != null && homeActionsAnimation[0].isRunning()) || (homeActionsAnimation[1] != null && homeActionsAnimation[1].isRunning()))) return;
                 page("Home");
-                long channelFunds = 0;
-                for (LightningOuterClass.Channel channel : active.getChannelsList())
+                long channelFunds = 0, receivable = 0;
+                for (LightningOuterClass.Channel channel : active.getChannelsList()) {
                     channelFunds = Math.addExact(channelFunds, channel.getLocalBalance());
+                    receivable = Math.addExact(receivable, channel.getRemoteBalance());
+                }
                 if (!info.getSyncedToChain()) text("Syncing chain · block " + info.getBlockHeight());
-                homeBalances(balance.getTotalBalance(), channelFunds);
+                homeBalances(balance.getTotalBalance(), channelFunds, receivable);
                 boolean hasPublic = false;
                 for (LightningOuterClass.Channel c : active.getChannelsList()) hasPublic |= !c.getPrivate();
                 for (LightningOuterClass.PendingChannelsResponse.PendingOpenChannel c : pending.getPendingOpenChannelsList()) hasPublic |= !c.getChannel().getPrivate();
@@ -830,8 +832,8 @@ public final class MainActivity extends Activity {
         size.topMargin = dp(24); size.bottomMargin = dp(16);
         scan.setLayoutParams(size);
     }
-    private void homeBalances(long onChain, long channelFunds) {
-        balanceSats[0] = onChain; balanceSats[1] = channelFunds;
+    private void homeBalances(long onChain, long channelFunds, long receivable) {
+        balanceSats[0] = onChain; balanceSats[1] = channelFunds; balanceSats[2] = receivable;
         balanceDropdown(0, "On Chain", this::sendOnChain, this::deposit);
         balanceDropdown(1, "Lightning", this::payment, this::receiveLightning);
         updateBalanceAmounts();
@@ -861,14 +863,31 @@ public final class MainActivity extends Activity {
         amount.setBackground(null);
         amount.setTextColor(0xffa8efd5); amount.setTextSize(17); amount.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         balanceAmounts[index] = amount;
-        amount.setOnClickListener(v -> {
+        View.OnClickListener cycleUnits = v -> {
             int count = prefs.getString("fiat-currency", "USD").equals("Off") ? 2 : 3;
             int unit = (displayUnit() + 1) % count;
             prefs.edit().putInt("display-unit", unit).apply();
             updateBalanceAmounts();
-        });
+        };
+        amount.setOnClickListener(cycleUnits);
         LinearLayout.LayoutParams amountSize = new LinearLayout.LayoutParams(0, -2, 1f); amountSize.leftMargin = dp(8);
-        balanceRow.addView(amount, amountSize);
+        if (index == 0) {
+            balanceRow.addView(amount, amountSize);
+        } else {
+            LinearLayout liquidity = new LinearLayout(this); liquidity.setGravity(Gravity.CENTER_VERTICAL);
+            Button incoming = new Button(this); styleButton(incoming, false); incoming.setBackground(null);
+            incoming.setTextColor(0xffb59b72); incoming.setOnClickListener(cycleUnits); balanceAmounts[2] = incoming;
+            for (Button value : new Button[]{amount, incoming}) {
+                value.setPadding(dp(2), dp(8), dp(2), dp(8));
+                value.setGravity(Gravity.CENTER); value.setMaxLines(2);
+                value.setAutoSizeTextTypeUniformWithConfiguration(8, 17, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
+            }
+            liquidity.addView(amount, new LinearLayout.LayoutParams(0, dp(62.4f), 1));
+            TextView divider = new TextView(this); divider.setText("|"); divider.setTextSize(15); divider.setTextColor(0xff65716c);
+            divider.setPadding(dp(3), 0, dp(3), 0); liquidity.addView(divider);
+            liquidity.addView(incoming, new LinearLayout.LayoutParams(0, dp(62.4f), 1));
+            balanceRow.addView(liquidity, amountSize);
+        }
         LinearLayout.LayoutParams rowSize = new LinearLayout.LayoutParams(-1, -2); rowSize.topMargin = dp(8); rowSize.bottomMargin = dp(8);
         page.addView(balanceRow, rowSize);
         actions.setPadding(dp(4), dp(4), dp(4), dp(12));
@@ -895,14 +914,20 @@ public final class MainActivity extends Activity {
             if (age >= -300000 && age < 900000 && fiatRates.has(code)) price = new java.math.BigDecimal(fiatRates.getString(code));
         } catch (Exception ignored) {}
         boolean needsFiat = false;
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 3; i++) {
             int unit = displayUnit();
             if (code.equals("Off") && unit == 2) unit = 0;
             needsFiat |= unit == 2;
             if (balanceAmounts[i] != null) {
-                balanceAmounts[i].setText(BalanceDisplay.format(balanceSats[i], unit, code, price));
-                balanceAmounts[i].setContentDescription((i == 0 ? "On-chain balance: " : "Lightning balance: ")
-                    + balanceAmounts[i].getText() + ". Tap to change units.");
+                String value = BalanceDisplay.format(balanceSats[i], unit, code, price);
+                String label = i == 0 ? "On-chain balance" : i == 1 ? "Spendable" : "Receivable";
+                if (i == 0) balanceAmounts[i].setText(value);
+                else {
+                    android.text.SpannableString display = new android.text.SpannableString(label + "\n" + value);
+                    display.setSpan(new android.text.style.RelativeSizeSpan(.75f), 0, label.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    balanceAmounts[i].setText(display);
+                }
+                balanceAmounts[i].setContentDescription(label + ": " + value + ". Tap to change units.");
             }
         }
         if (needsFiat) fetchFiatRates();
