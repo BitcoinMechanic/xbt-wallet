@@ -320,7 +320,7 @@ public final class MainActivity extends Activity {
             prefs.edit().putBoolean("header-fiat-rate", !prefs.getBoolean("header-fiat-rate", false)).apply();
             if (headerSlideAnimation != null) headerSlideAnimation.cancel();
             headerSlideAnimation = android.animation.ValueAnimator.ofFloat(headerSlide, prefs.getBoolean("header-fiat-rate", false) ? 1f : 0f);
-            headerSlideAnimation.setDuration(100);
+            headerSlideAnimation.setDuration(500);
             headerSlideAnimation.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
             headerSlideAnimation.addUpdateListener(animation -> {
                 headerSlide = (float) animation.getAnimatedValue();
@@ -335,7 +335,7 @@ public final class MainActivity extends Activity {
         if (prefs.getBoolean("header-fiat-rate", false) && !prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         if (title.equals("Home")) {
             Button menu = new Button(this); styleButton(menu, false);
-            menu.setText("⋮"); menu.setTextSize(25); menu.setPadding(0, 0, 0, 0);
+            menu.setText("⋮"); menu.setTextSize(27.5f); menu.setPadding(0, 0, 0, 0);
             menu.setBackground(null);
             menu.setContentDescription("Wallet menu");
             FrameLayout.LayoutParams menuSize = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL);
@@ -1379,7 +1379,11 @@ public final class MainActivity extends Activity {
             "On chain funds", "Channels", "Peers", "Swap controllers", "Back up seed", "Test recovery", "Advanced"};
         Runnable[] actions = {this::paymentHistory, this::fiatCurrency, this::utxos, this::channelList, this::peerList, this::swapControllers,
             this::backup, this::testRecovery, this::advanced};
-        for (int i = 0; i < labels.length; i++) popup.getMenu().add(0, i, i, labels[i]);
+        for (int i = 0; i < labels.length; i++) {
+            android.text.SpannableString label = new android.text.SpannableString(labels[i]);
+            label.setSpan(new android.text.style.RelativeSizeSpan(1.1f), 0, label.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            popup.getMenu().add(0, i, i, label);
+        }
         popup.setOnMenuItemClickListener(item -> {
             if (busy) return true;
             popup.dismiss(); actions[item.getItemId()].run(); return true;
