@@ -704,6 +704,7 @@ public final class MainActivity extends Activity {
             animateHomeActions(index, expand);
         });
         chain.setAllCaps(false);
+        chain.setBackground(null);
         page.removeView(chain);
         LinearLayout balanceRow = new LinearLayout(this);
         balanceRow.setGravity(Gravity.CENTER_VERTICAL);
