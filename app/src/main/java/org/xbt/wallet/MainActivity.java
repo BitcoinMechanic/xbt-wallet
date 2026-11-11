@@ -2435,6 +2435,7 @@ public final class MainActivity extends Activity {
                         routerrpc.RouterOuterClass.SendPaymentRequest.Builder request = routerrpc.RouterOuterClass.SendPaymentRequest.newBuilder()
                             .setPaymentRequest(raw).setFeeLimitSat(feeLimit).setTimeoutSeconds(30).setMaxParts(1);
                         if (amountless) request.setAmtMsat(msats);
+                        runOnUiThread(() -> { page("Payment submitted"); text("Waiting for the node to report settlement. Closing this screen does not cancel the payment."); button("Home", this::home); });
                         lndmobile.Lndmobile.routerSendPaymentV2(request.build().toByteArray(), new lndmobile.RecvStream() {
                             private volatile boolean terminal;
                             public void onResponse(byte[] data) {
@@ -2445,12 +2446,22 @@ public final class MainActivity extends Activity {
                                     if (result.getStatus() == LightningOuterClass.Payment.PaymentStatus.FAILED) status += ": " + result.getFailureReason().name();
                                     prefs.edit().putString("payment-" + pay.getPaymentHash(), status).commit();
                                     final String label = status;
-                                    runOnUiThread(() -> { if (!isDestroyed()) { page(label); button("Home", MainActivity.this::home); } });
+                                    final boolean succeeded = result.getStatus() == LightningOuterClass.Payment.PaymentStatus.SUCCEEDED;
+                                    runOnUiThread(() -> {
+                                        if (isDestroyed()) return;
+                                        page(succeeded ? "Payment successful" : label);
+                                        if (succeeded) {
+                                            PaymentHandshakeView handshake = new PaymentHandshakeView(MainActivity.this);
+                                            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, dp(220));
+                                            size.topMargin = dp(20); size.bottomMargin = dp(20);
+                                            page.addView(handshake, size);
+                                        }
+                                        button("Home", MainActivity.this::home);
+                                    });
                                 } catch (Exception e) { onError(e); }
                             }
                             public void onError(Exception e) { if (terminal) return; runOnUiThread(() -> { if (!isDestroyed()) error(new Exception("Payment status uncertain. Refresh payment history before any further attempt. " + e.getMessage())); }); }
                         });
-                        runOnUiThread(() -> { page("Payment submitted"); text("Waiting for the node to report settlement. Closing this screen does not cancel the payment."); button("Home", this::home); });
                     })));
             });
         }); button("Home", this::home);
