@@ -891,7 +891,7 @@ public final class MainActivity extends Activity {
                 value.setMinHeight(0); value.setMinimumHeight(0);
                 value.setGravity(Gravity.END | Gravity.CENTER_VERTICAL); value.setMaxLines(1);
                 value.setTextSize(14.5f);
-                line.addView(value, new LinearLayout.LayoutParams(-2, dp(36)));
+                line.addView(value, new LinearLayout.LayoutParams(-2, dp(27)));
                 liquidity.addView(line, new LinearLayout.LayoutParams(-1, -2));
             }
             balanceRow.addView(liquidity, amountSize);
