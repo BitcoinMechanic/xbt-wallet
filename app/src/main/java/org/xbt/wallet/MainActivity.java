@@ -603,7 +603,11 @@ public final class MainActivity extends Activity {
         card.addView(expanded, new LinearLayout.LayoutParams(-1, -2));
         expanded.setVisibility(expandedHomeChannels.contains(point) ? View.VISIBLE : View.GONE);
         expanded.setAlpha(expandedHomeChannels.contains(point) ? 1f : 0f);
-        card.setContentDescription(label + ". " + status + ". Local liquidity on the left, remote on the right. Tap to show or hide balances.");
+        card.setContentDescription(label + ". " + status + ". Local liquidity on the left, remote on the right. Tap to show or hide balances. Touch and hold to edit the channel label.");
+        card.setOnLongClickListener(v -> {
+            labelChannel(point, this::home);
+            return true;
+        });
         card.setFocusable(true); card.setOnClickListener(v -> {
             boolean show = !expandedHomeChannels.contains(point);
             android.animation.ValueAnimator prior = channelExpansions.remove(point);
