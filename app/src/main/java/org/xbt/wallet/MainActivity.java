@@ -390,6 +390,29 @@ public final class MainActivity extends Activity {
         }
         edit.apply();
     }
+    private void confirmAction(String title, String message, String action, Runnable confirmed) {
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(20), dp(20), dp(20));
+        TextView heading = new TextView(this); heading.setText(title); heading.setTextSize(20);
+        heading.setTextColor(0xffeef5f0); heading.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        heading.setPadding(0, 0, 0, dp(16)); form.addView(heading);
+        ScrollView scroll = new ScrollView(this);
+        TextView details = new TextView(this); details.setText(message); details.setTextSize(15);
+        details.setTextColor(0xffafbeb6); details.setLineSpacing(dp(3), 1f);
+        details.setPadding(0, 0, 0, dp(16)); scroll.addView(details);
+        form.addView(scroll, new LinearLayout.LayoutParams(-1, -2, 1));
+        LinearLayout actions = new LinearLayout(this); actions.setBaselineAligned(false);
+        Button cancel = new Button(this); cancel.setText("Cancel"); styleButton(cancel, false);
+        Button accept = new Button(this); accept.setText(action); styleButton(accept, true);
+        LinearLayout.LayoutParams cancelSize = new LinearLayout.LayoutParams(0, -2, 1); cancelSize.rightMargin = dp(5);
+        LinearLayout.LayoutParams acceptSize = new LinearLayout.LayoutParams(0, -2, 1); acceptSize.leftMargin = dp(5);
+        actions.addView(cancel, cancelSize); actions.addView(accept, acceptSize); form.addView(actions);
+        AlertDialog dialog = new WalletDialogBuilder().setView(form).create();
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        accept.setOnClickListener(v -> { accept.setEnabled(false); dialog.dismiss(); confirmed.run(); });
+        dialog.show();
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff101517, 18, 0xff304037));
+    }
     private void error(Exception e) { new WalletDialogBuilder().setTitle("Could not complete action").setMessage(e.getMessage()).setPositiveButton("OK", null).show(); }
     private void work(Job job) {
         if (busy || node == null) return;
@@ -2407,8 +2430,7 @@ public final class MainActivity extends Activity {
                 if (!Policy.invoiceAllowed(true, msats, pay.getTimestamp(), pay.getExpiry(), System.currentTimeMillis()/1000)) throw new Exception("This invoice has expired or has an invalid amount.");
                 if (prefs.contains("payment-" + pay.getPaymentHash())) throw new Exception("This invoice already has a recorded attempt. Reconcile its status before retrying.");
                 long feeLimit = Math.max(1, msats/1000/100);
-                runOnUiThread(() -> new WalletDialogBuilder().setTitle("Pay XBT invoice?").setMessage(amountReview(msats, reviewPrice) + "\nMaximum routing fee: " + displayAmount(feeLimit) + "\nRecipient: " + pay.getDestination())
-                    .setNegativeButton("Cancel",null).setPositiveButton("Pay",(d,w)->work(()->{
+                runOnUiThread(() -> confirmAction("Pay XBT invoice?", amountReview(msats, reviewPrice) + "\nMaximum routing fee: " + displayAmount(feeLimit) + "\nRecipient: " + pay.getDestination(), "Pay", () -> work(()->{
                         if (!prefs.edit().putString("payment-" + pay.getPaymentHash(), "submitted").putString("payment-label-" + pay.getPaymentHash(), paymentLabel).commit()) throw new Exception("Could not record payment");
                         routerrpc.RouterOuterClass.SendPaymentRequest.Builder request = routerrpc.RouterOuterClass.SendPaymentRequest.newBuilder()
                             .setPaymentRequest(raw).setFeeLimitSat(feeLimit).setTimeoutSeconds(30).setMaxParts(1);
@@ -2429,7 +2451,7 @@ public final class MainActivity extends Activity {
                             public void onError(Exception e) { if (terminal) return; runOnUiThread(() -> { if (!isDestroyed()) error(new Exception("Payment status uncertain. Refresh payment history before any further attempt. " + e.getMessage())); }); }
                         });
                         runOnUiThread(() -> { page("Payment submitted"); text("Waiting for the node to report settlement. Closing this screen does not cancel the payment."); button("Home", this::home); });
-                    })).show());
+                    })));
             });
         }); button("Home", this::home);
         if (!scanned.isEmpty()) invoice.setText(scanned);
