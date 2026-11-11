@@ -39,19 +39,26 @@ final class WalletTests: XCTestCase {
         try reopened.finish(id, state: "failed", result: "No route")
         XCTAssertNoThrow(try reopened.begin("lightning", reference: reference))
     }
+    private func waitForWallet(_ rpc: NativeRPC) async throws {
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            if try await rpc.call("getState").text("state") == "NON_EXISTING" { return }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        try? await rpc.stop()
+        throw WalletError("Native wallet did not reach NON_EXISTING within 20 seconds.")
+    }
     func testNativeEngineStartsGeneratesSeedAndRestarts() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("engine-test-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let rpc = NativeRPC()
         try await rpc.start(directory: directory, regtest: true)
-        let state = try await rpc.call("getState")
-        XCTAssertEqual(state.text("state"), "NON_EXISTING")
+        try await waitForWallet(rpc)
         let seed = try await rpc.call("genSeed")
         XCTAssertEqual((seed.fields["cipher_seed_mnemonic"] as? [String])?.count, 24)
         try await rpc.stop()
         try await rpc.start(directory: directory, regtest: true)
-        let restarted = try await rpc.call("getState")
-        XCTAssertEqual(restarted.text("state"), "NON_EXISTING")
+        try await waitForWallet(rpc)
         try await rpc.stop()
         try FileManager.default.removeItem(at: directory)
     }

@@ -17,6 +17,9 @@ xcodegen generate
 open XBTWallet.xcodeproj
 ```
 
+Alternatively, run `scripts/build-ios-app.sh` to produce an unsigned device
+archive, or `scripts/build-ios-app.sh --simulator` for a simulator build.
+
 Select the **XBTWallet** scheme and an iPhone simulator. For a physical iPhone,
 select your Apple development team in Signing & Capabilities and a unique bundle
 identifier if necessary. The team/certificate/provisioning profile are not stored
@@ -63,8 +66,8 @@ background; this is not Android's foreground service and does not provide an
 always-online Lightning node. Reopening resumes the process or unlocks the
 existing wallet after a cold launch. The OS can terminate the process, so all
 mutating operations are journaled before dispatch and never auto-retried.
-Unresolved operations remain visible in history; reconciliation is currently
-manual. Clearing/deleting the app is not a troubleshooting step.
+Unresolved operations remain visible in history. Lightning history reconciles
+terminal node results; ambiguous on-chain operations require manual inspection. Clearing/deleting the app is not a troubleshooting step.
 
 Recovery words alone do not recreate channels. Save the static channel backup
 again after channel changes. Recovery requires the seed, the backup and peer

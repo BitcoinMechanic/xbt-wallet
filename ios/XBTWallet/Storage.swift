@@ -56,8 +56,19 @@ final class WalletStore {
     init(test: Bool = false) throws {
         let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
         directory = base.appendingPathComponent(test ? "XBT-iOS-tests" : "XBT-mainnet", isDirectory: true)
-        secretPrefix = test ? "test." : "mainnet."
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Keychain survives app deletion. Bind secrets to an installation marker so a
+        // reinstall can never silently reuse an old seed without its channel state.
+        let marker = directory.appendingPathComponent("installation-id")
+        let installation: String
+        if FileManager.default.fileExists(atPath: marker.path) {
+            installation = try String(contentsOf: marker, encoding: .utf8)
+            guard UUID(uuidString: installation) != nil else { throw WalletError("The wallet installation marker is damaged. Do not delete wallet data.") }
+        } else {
+            installation = UUID().uuidString
+            try Data(installation.utf8).write(to: marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+        secretPrefix = (test ? "test." : "mainnet.") + installation + "."
         var url = directory
         var resource = URLResourceValues()
         resource.isExcludedFromBackup = true

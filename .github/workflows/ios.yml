@@ -18,7 +18,7 @@ jobs:
           cache-dependency-path: ios/Native/dependencies.lock
       - name: Install protobuf compiler
         run: brew install protobuf xcodegen
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: engine-cache
         with:
           path: ios/Frameworks/Lndmobile.xcframework
@@ -26,6 +26,11 @@ jobs:
       - name: Build the pinned XBT Lightning engine for iPhone and simulator
         if: steps.engine-cache.outputs.cache-hit != 'true'
         run: scripts/build-ios-node.sh
+      - uses: actions/cache/save@v4
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        with:
+          path: ios/Frameworks/Lndmobile.xcframework
+          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: Lndmobile-xcframework
@@ -38,7 +43,7 @@ jobs:
           xcodegen generate
       - name: Compile unsigned iPhone app
         working-directory: ios
-        run: xcodebuild -project XBTWallet.xcodeproj -scheme XBTWallet -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project XBTWallet.xcodeproj -scheme XBTWallet -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath DerivedData -archivePath XBTWallet.xcarchive CODE_SIGNING_ALLOWED=NO archive
       - name: Test on iPhone simulator
         working-directory: ios
         run: |
@@ -49,7 +54,7 @@ jobs:
         with:
           name: iPhone-build-and-tests
           path: |
-            ios/DerivedData/Build/Products/Release-iphoneos/XBTWallet.app
+            ios/XBTWallet.xcarchive
             ios/DerivedData/Build/Products/Debug-iphonesimulator/XBTWallet.app
             ios/TestResults.xcresult
           retention-days: 14
