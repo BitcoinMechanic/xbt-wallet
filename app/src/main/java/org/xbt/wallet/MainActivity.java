@@ -1980,7 +1980,7 @@ public final class MainActivity extends Activity {
         button(node != null && node.isRemote() ? "Node backup" : "Back up seed", this::backup);
         if (node == null || !node.isRemote()) button("Test recovery", this::testRecovery);
         button("Peers", this::peerList);
-        button("Closed-channel history", this::closedChannels); button("Back", this::home);
+        button("Closed-channel history", this::closedChannels); button("Home", this::home);
     }
     private void nodeConnection() {
         page("Node connection");
