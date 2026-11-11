@@ -164,6 +164,7 @@ public final class MainActivity extends Activity {
     }
     @Override public void onBackPressed() {
         if (walletPopup != null) { walletPopup.dismiss(); return; }
+        if (!busy && WalletProfiles.isDraft(this, profile)) { cancelWalletSetup(); return; }
         if (screen.equals("Home")) { super.onBackPressed(); return; }
         if (busy) {
             Toast.makeText(this, "Please wait for the current operation to finish", Toast.LENGTH_SHORT).show();
@@ -189,6 +190,7 @@ public final class MainActivity extends Activity {
     private String profile;
     private String screen = "";
     private android.animation.ValueAnimator onboardingReveal;
+    private long startingRevealAt;
     private int historyTab;
     private boolean channelDetailsFromHome;
     private final Set<String> expandedHomeChannels = new HashSet<>();
@@ -266,6 +268,8 @@ public final class MainActivity extends Activity {
         page(title, sensitive, pageRoute(title));
     }
     private void page(String title, boolean sensitive, Runnable restore) {
+        boolean changedTitle = !title.equals(screen);
+        if (title.equals("Wallet is starting") && changedTitle) startingRevealAt = android.os.SystemClock.elapsedRealtime();
         recordNavigation(title, restore);
         if (onboardingReveal != null) { onboardingReveal.cancel(); onboardingReveal = null; }
         activeAmountEntry = null;
@@ -377,7 +381,7 @@ public final class MainActivity extends Activity {
         page.addView(header, headerSize);
         if (!title.equals("Home")) {
             boolean onboarding = title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
-                || title.equals("Name your wallet") || title.equals("Wallet created");
+                || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Wallet is starting");
             TextView heading;
             if (onboarding) {
                 heading = new OnboardingTitleView(this); heading.setText(title);
@@ -391,12 +395,17 @@ public final class MainActivity extends Activity {
             heading.setPadding(0, 0, 0, dp(20));
             if (onboarding) revealOnboardingTitle((OnboardingTitleView) heading);
         }
+        if (WalletProfiles.isDraft(this, profile) && !WalletProfiles.hasPendingDeletion(this))
+            button("Cancel setup", this::cancelWalletSetup);
     }
     private void revealOnboardingTitle(OnboardingTitleView heading) {
         if (!android.animation.ValueAnimator.areAnimatorsEnabled()) return;
-        heading.setReveal(0f);
-        onboardingReveal = android.animation.ValueAnimator.ofFloat(0f, 1f);
-        onboardingReveal.setDuration(500);
+        long elapsed = screen.equals("Wallet is starting") ? Math.max(0, android.os.SystemClock.elapsedRealtime() - startingRevealAt) : 0;
+        if (elapsed >= 500) return;
+        float from = elapsed / 500f;
+        heading.setReveal(from);
+        onboardingReveal = android.animation.ValueAnimator.ofFloat(from, 1f);
+        onboardingReveal.setDuration(500 - elapsed);
         onboardingReveal.setInterpolator(new android.view.animation.LinearInterpolator());
         onboardingReveal.addUpdateListener(frame -> heading.setReveal((float) frame.getAnimatedValue()));
         onboardingReveal.start();
@@ -595,11 +604,27 @@ public final class MainActivity extends Activity {
         }
         button("Delete selected wallet", this::deleteWallet);
         text("To delete another wallet, select it first.");
-        button("Create a new wallet", () -> {
-            try { switchWallet(WalletProfiles.create(this)); }
-            catch (Exception e) { error(e); }
-        });
+        button("Create a new wallet", this::newWallet);
         button("Home", this::home);
+    }
+    private void newWallet() {
+        // Do not register a draft until the current runtime has stopped successfully.
+        profileWork(() -> {
+            if (node != null) node.stopForSwitch();
+            String id = WalletProfiles.createDraft(this);
+            WalletProfiles.activate(this, id);
+            handler.removeCallbacks(poll);
+            runOnUiThread(this::restartSelectedWallet);
+        });
+    }
+    private void cancelWalletSetup() {
+        profileWork(() -> {
+            if (!WalletProfiles.isDraft(this, profile)) throw new Exception("This wallet has already been created.");
+            if (node != null) node.stopForSwitch();
+            WalletProfiles.cancelDraft(this, profile);
+            handler.removeCallbacks(poll);
+            runOnUiThread(this::restartSelectedWallet);
+        });
     }
     private void switchWallet(String id) {
         if (busy) return;
@@ -717,8 +742,8 @@ public final class MainActivity extends Activity {
             if (clip == null || clip.getItemCount() == 0) { error(new Exception("The clipboard is empty.")); return; }
             importConfig.accept(clip.getItemAt(0).coerceToText(this).toString());
         });
-        page.removeView(scanConnection); page.addView(scanConnection, 4);
-        page.removeView(pasteConnection); page.addView(pasteConnection, 5);
+        page.removeView(scanConnection); page.addView(scanConnection, WalletProfiles.isDraft(this, profile) ? 5 : 4);
+        page.removeView(pasteConnection); page.addView(pasteConnection, WalletProfiles.isDraft(this, profile) ? 6 : 5);
         TextView status = text("");
         button("Test and connect", () -> {
             if (busy) return;
@@ -735,6 +760,7 @@ public final class MainActivity extends Activity {
                     org.json.JSONObject saved = new org.json.JSONObject().put("endpoint", config.endpoint).put("rune", config.rune).put("certificate", config.certificate).put("nodeId", verified);
                     // Existing embedded profiles can never be converted into remote profiles.
                     if (prefs.getString("mode", "").equals("easy")) throw new Exception("Create a new wallet profile for Remote Control.");
+                    WalletProfiles.completeSetup(this, profile);
                     new Vault(this, profile).put("remote-config", saved.toString());
                     if (!prefs.edit().putString("mode", "remote").putBoolean("modeChoiceMade", true).putString("wallet-name", label).commit()) throw new Exception("Could not save the remote wallet.");
                     runOnUiThread(() -> {
@@ -778,6 +804,7 @@ public final class MainActivity extends Activity {
             android.content.SharedPreferences.Editor edit = prefs.edit();
             if (name.isEmpty()) edit.remove("wallet-name"); else edit.putString("wallet-name", name);
             if (!edit.commit()) throw new Exception("Could not save the wallet name. Please try again.");
+            WalletProfiles.completeSetup(this, profile);
             node.createWallet();
             runOnUiThread(() -> {
                 navigation.clear(); currentNavigation = null;
@@ -807,7 +834,7 @@ public final class MainActivity extends Activity {
         });
     }
     private void start() {
-        page("Starting your node");
+        page("Wallet is starting");
         Intent intent = new Intent(this, NodeService.class); startForegroundService(intent);
         bound = bindService(intent, connection, BIND_AUTO_CREATE);
     }
@@ -816,7 +843,7 @@ public final class MainActivity extends Activity {
         // Keep the sync screen visible while the asynchronous status query runs.
         // Replacing it with Home here causes a flash on every startup poll.
         if ((screen.equals("Home") || screen.equals("Wallet is starting")) && node != null && node.rpcReady) { refresh(); return; }
-        page("Home");
+        page(node == null || !node.rpcReady ? "Wallet is starting" : "Home");
         if (node == null) { text("Connecting to node…"); return; }
         text(node.status);
         if (!node.rpcReady) { button("Wallets", this::wallets); button("Refresh", this::home); button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection); return; }
@@ -1635,8 +1662,8 @@ public final class MainActivity extends Activity {
         if (walletMenuAnchor == null || walletPopup != null) return;
         PopupMenu popup = new PopupMenu(this, walletMenuAnchor, Gravity.END);
         walletPopup = popup;
-        String[] labels = {"Wallets", "Payment history", "On chain funds", "Channels", "Peers", "Swap controllers", "Advanced"};
-        Runnable[] actions = {this::wallets, this::paymentHistory, this::utxos, this::channelList, this::peerList, this::swapControllers, this::advanced};
+        String[] labels = {"Wallets", "Payment history", "On chain funds", "Channels", "Swap controllers", "Advanced"};
+        Runnable[] actions = {this::wallets, this::paymentHistory, this::utxos, this::channelList, this::swapControllers, this::advanced};
         for (int i = 0; i < labels.length; i++) {
             android.text.SpannableString label = new android.text.SpannableString(labels[i]);
             label.setSpan(new android.text.style.RelativeSizeSpan(1.1f), 0, label.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -1940,6 +1967,7 @@ public final class MainActivity extends Activity {
         button("Fiat currency: " + prefs.getString("fiat-currency", "USD"), this::fiatCurrency);
         button(node != null && node.isRemote() ? "Node backup" : "Back up seed", this::backup);
         if (node == null || !node.isRemote()) button("Test recovery", this::testRecovery);
+        button("Peers", this::peerList);
         button("Closed-channel history", this::closedChannels); button("Back", this::home);
     }
     private void nodeConnection() {

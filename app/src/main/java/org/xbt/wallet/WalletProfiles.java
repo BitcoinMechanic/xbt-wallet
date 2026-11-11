@@ -27,10 +27,25 @@ final class WalletProfiles {
         if (!registry(context).contains("ids")) all.add(LEGACY);
         return new ArrayList<>(all);
     }
-    static String create(Context context) throws Exception {
+    static String create(Context context) throws Exception { return create(context, false); }
+    static String createDraft(Context context) throws Exception { return create(context, true); }
+    static boolean isDraft(Context context, String id) { return settings(context, id).contains("setup-return-wallet"); }
+    static void completeSetup(Context context, String id) throws Exception {
+        if (!settings(context, id).edit().remove("setup-return-wallet").commit()) throw new Exception("Could not finish wallet setup.");
+    }
+    static void cancelDraft(Context context, String id) throws Exception {
+        if (!isDraft(context, id)) throw new Exception("This wallet has already been created. Use Wallets to manage it.");
+        Vault vault = new Vault(context, id);
+        if (vault.get("seed") != null || vault.get("password") != null || vault.get("remote-config") != null)
+            throw new Exception("This wallet already contains keys or connection credentials. It cannot be discarded as unfinished setup.");
+        beginDeletion(context, id, settings(context, id).getString("setup-return-wallet", ""));
+    }
+    private static String create(Context context, boolean draft) throws Exception {
         String id = UUID.randomUUID().toString().replace("-", "");
         SharedPreferences previous = settings(context, active(context));
-        if (!settings(context, id).edit().putString("network", previous.getString("network", "mainnet"))
+        SharedPreferences.Editor setup = settings(context, id).edit();
+        if (draft) setup.putString("setup-return-wallet", active(context));
+        if (!setup.putString("network", previous.getString("network", "mainnet"))
                 .putInt("display-unit", previous.getInt("display-unit", 0))
                 .putString("fiat-currency", previous.getString("fiat-currency", "USD")).commit())
             throw new Exception("Could not create wallet profile.");
@@ -43,14 +58,15 @@ final class WalletProfiles {
         if (!registry(context).edit().putString("active", id).commit()) throw new Exception("Could not switch wallet profile.");
     }
     /** Commit removal before erasing files. A crash resumes cleanup before any node starts. */
-    static void beginDeletion(Context context, String id) throws Exception {
+    static void beginDeletion(Context context, String id) throws Exception { beginDeletion(context, id, ""); }
+    private static void beginDeletion(Context context, String id, String preferred) throws Exception {
         valid(id);
         if (!active(context).equals(id) || !ids(context).contains(id)) throw new Exception("Select this wallet before deleting it.");
         Set<String> remaining = new HashSet<>(ids(context)); remaining.remove(id);
         String next;
         if (remaining.isEmpty()) {
             next = create(context); remaining.add(next);
-        } else next = new TreeSet<>(remaining).first();
+        } else next = remaining.contains(preferred) ? preferred : new TreeSet<>(remaining).first();
         Set<String> pending = new HashSet<>(registry(context).getStringSet("pending-deletions", Collections.emptySet()));
         pending.add(id);
         if (!registry(context).edit().putStringSet("ids", remaining).putString("active", next)
