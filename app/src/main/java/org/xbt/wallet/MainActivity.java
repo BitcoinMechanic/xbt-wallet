@@ -215,7 +215,7 @@ public final class MainActivity extends Activity {
     private android.content.SharedPreferences prefs;
     private final Runnable poll = new Runnable() {
         public void run() {
-            if (node != null && !busy && (screen.equals("Home") || screen.equals("Wallet is starting"))) home();
+            if (node != null && !busy && (screen.equals("Home") || screen.equals("Starting..."))) home();
             if (node != null && !busy && screen.equals("Receive XBT")) checkDeposit();
             if (node != null && !busy && screen.equals("Lightning invoice")) checkLightningReceipt();
             if (node != null && !busy && screen.equals("Swap invoice") && viewingSwapHash != null) {
@@ -269,7 +269,7 @@ public final class MainActivity extends Activity {
     }
     private void page(String title, boolean sensitive, Runnable restore) {
         boolean changedTitle = !title.equals(screen);
-        if (title.equals("Wallet is starting") && changedTitle) startingRevealAt = android.os.SystemClock.elapsedRealtime();
+        if (title.equals("Starting...") && changedTitle) startingRevealAt = android.os.SystemClock.elapsedRealtime();
         recordNavigation(title, restore);
         if (onboardingReveal != null) { onboardingReveal.cancel(); onboardingReveal = null; }
         activeAmountEntry = null;
@@ -389,7 +389,7 @@ public final class MainActivity extends Activity {
         page.addView(header, headerSize);
         if (!title.equals("Home")) {
             boolean onboarding = title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
-                || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Wallet is starting") || title.equals("Wallets")
+                || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Starting...") || title.equals("Wallets")
                 || title.equals("Payment history") || title.equals("On chain funds") || title.equals("Channels")
                 || title.equals("Swap controllers") || title.equals("Advanced");
             TextView heading;
@@ -415,7 +415,7 @@ public final class MainActivity extends Activity {
     }
     private void revealOnboardingTitle(OnboardingTitleView heading) {
         if (!android.animation.ValueAnimator.areAnimatorsEnabled()) return;
-        long elapsed = screen.equals("Wallet is starting") ? Math.max(0, android.os.SystemClock.elapsedRealtime() - startingRevealAt) : 0;
+        long elapsed = screen.equals("Starting...") ? Math.max(0, android.os.SystemClock.elapsedRealtime() - startingRevealAt) : 0;
         if (elapsed >= 500) return;
         float from = elapsed / 500f;
         heading.setReveal(from);
@@ -880,7 +880,7 @@ public final class MainActivity extends Activity {
         });
     }
     private void start() {
-        page("Wallet is starting");
+        page("Starting...");
         Intent intent = new Intent(this, NodeService.class); startForegroundService(intent);
         bound = bindService(intent, connection, BIND_AUTO_CREATE);
     }
@@ -888,8 +888,8 @@ public final class MainActivity extends Activity {
         if (node == null && prefs.getString("mode", "").isEmpty()) { modes(); return; }
         // Keep the sync screen visible while the asynchronous status query runs.
         // Replacing it with Home here causes a flash on every startup poll.
-        if ((screen.equals("Home") || screen.equals("Wallet is starting")) && node != null && node.rpcReady) { refresh(); return; }
-        page(node == null || !node.rpcReady ? "Wallet is starting" : "Home");
+        if ((screen.equals("Home") || screen.equals("Starting...")) && node != null && node.rpcReady) { refresh(); return; }
+        page(node == null || !node.rpcReady ? "Starting..." : "Home");
         if (node == null) { text("Connecting to node…"); return; }
         text(node.status);
         if (!node.rpcReady) {
@@ -921,7 +921,7 @@ public final class MainActivity extends Activity {
                 SyncProgress progress = node.syncProgress();
                 runOnUiThread(() -> {
                     if (!screen.equals(origin)) return;
-                    page("Wallet is starting");
+                    page("Starting...");
                     text(state == Stateservice.WalletState.UNLOCKED ? "Wallet unlocked · synchronizing chain" : "Preparing wallet");
                     if (progress.target > 0) {
                         syncProgressBar("Block headers", progress.headers, progress.target, progress.percent(progress.headers));
