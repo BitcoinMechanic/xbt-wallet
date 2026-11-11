@@ -53,7 +53,7 @@ public final class NodeService extends Service {
             if (!directory.exists() && !directory.mkdirs()) throw new Exception("Cannot create node directory");
             String args = "--lnddir=" + directory.getAbsolutePath() + " --bitcoin.active --bitcoin." + network
                     + " --bitcoin.node=neutrino" + (peer.isEmpty() ? "" : " --neutrino.connect=" + peer)
-                    + " --nolisten --norest --rpclisten=127.0.0.1:0 --tlsdisableautofill";
+                    + " --nolisten --norest --rpclisten=127.0.0.1:0 --tlsdisableautofill --accept-keysend";
             if (network.equals("regtest")) args += " --bitcoin.blake2b-activation-height=1";
 
             boolean useTor = prefs.getBoolean("useTor", false);
