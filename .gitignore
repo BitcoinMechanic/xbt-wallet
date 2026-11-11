@@ -22,3 +22,5 @@ ios/DerivedData/
 *.xcarchive
 *.ipa
 **/xcuserdata/
+ios/XBTWallet.xcodeproj/
+ios/TestResults.xcresult/

@@ -26,6 +26,14 @@ go install golang.org/x/mobile/cmd/gobind@v0.0.0-20261011034528-197770444867
 go install github.com/lightninglabs/falafel@v0.9.2
 go install golang.org/x/tools/cmd/goimports@v0.37.0
 (cd "$node_source/mobile" && SUBSERVER_PREFIX=1 ./gen_bindings.sh v0.9.2)
+cp "$project_root/ios/Native/json_rpc.go" "$node_source/mobile/ios_json_rpc.go"
+# iOS launch arguments are not LND flags; replace them on each runtime start.
+python3 - "$node_source/mobile/bindings.go" <<'PYTHON'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("os.Args = append(os.Args, splitArgs...)", "os.Args = append([]string{os.Args[0]}, splitArgs...)")
+open(p, "w").write(s)
+PYTHON
 mkdir -p "$project_root/ios/Frameworks"
 cd "$node_source"
 gomobile bind -target=ios,iossimulator -iosversion=16.0 \
