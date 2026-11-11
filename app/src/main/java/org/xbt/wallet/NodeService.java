@@ -58,10 +58,13 @@ public final class NodeService extends Service {
             boolean useTor = prefs.getBoolean("useTor", false);
             if (peer.toLowerCase(java.util.Locale.ROOT).contains(".onion:") && !useTor)
                 throw new Exception("Enable Tor to connect to an onion peer.");
-            if (useTor) {
+            boolean onionPeers = prefs.getBoolean("onionPeers", false);
+            if (useTor || onionPeers) {
                 int socks = tor.start(this, message -> status = message);
                 args += " --tor.active --tor.socks=127.0.0.1:" + socks
-                    + " --tor.streamisolation --connectiontimeout=60s --neutrino.broadcasttimeout=60s";
+                    + " --connectiontimeout=60s --neutrino.broadcasttimeout=60s";
+                if (useTor) args += " --tor.streamisolation";
+                if (!useTor) args += " --tor.skip-proxy-for-clearnet-targets";
             }
             if (network.equals("mainnet")) {
                 String feeUrl = prefs.getString("feeUrl", "");
@@ -73,7 +76,7 @@ public final class NodeService extends Service {
                 args += " --fee.url=" + Policy.feeUrl(feeUrl, useTor);
             }
             Lndmobile.start(args, new Callback() {
-                public void onResponse(byte[] ignored) { rpcReady = true; status = useTor ? "Node started · Tor" : "Node started · direct connection"; }
+                public void onResponse(byte[] ignored) { rpcReady = true; status = useTor ? "Node started · Tor" : onionPeers ? "Node started · direct connections and Tor onion peers" : "Node started · direct connection"; }
                 public void onError(Exception error) { rpcReady = false; status = "Node could not start: " + error.getMessage(); }
             });
         } catch (Exception e) { status = e.getMessage(); }

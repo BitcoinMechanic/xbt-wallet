@@ -1301,6 +1301,10 @@ public final class MainActivity extends Activity {
         EditText peer = field(mainnet ? "Automatic discovery (leave blank)" : "Full-node host:port",
             prefs.getString("syncPeer", mainnet ? "" : "10.0.2.2:19444"));
         CheckBox tor = new CheckBox(this); tor.setText("Use Tor"); tor.setChecked(prefs.getBoolean("useTor", false)); page.addView(tor);
+        CheckBox onionPeers = new CheckBox(this); onionPeers.setText("Enable onion Lightning peers (keep clearnet direct)");
+        onionPeers.setChecked(prefs.getBoolean("onionPeers", false)); page.addView(onionPeers);
+        onionPeers.setEnabled(!tor.isChecked());
+        tor.setOnCheckedChangeListener((v, checked) -> onionPeers.setEnabled(!checked));
         EditText feeUrl = null;
         if (prefs.getString("network", "regtest").equals("mainnet")) {
             text("XBT fee-estimator URL"); feeUrl = field("https://…", prefs.getString("feeUrl", ""));
@@ -1328,7 +1332,7 @@ public final class MainActivity extends Activity {
                 String entered = peer.getText().toString().trim();
                 String endpoint = mainnet && entered.isEmpty() ? "" : Policy.endpoint(entered);
                 if (endpoint.contains(".onion:") && !tor.isChecked()) throw new Exception("Enable Tor for an onion peer.");
-                android.content.SharedPreferences.Editor edit = prefs.edit().putString("syncPeer", endpoint).putBoolean("useTor", tor.isChecked());
+                android.content.SharedPreferences.Editor edit = prefs.edit().putString("syncPeer", endpoint).putBoolean("useTor", tor.isChecked()).putBoolean("onionPeers", onionPeers.isChecked());
                 if (feeSource != null && !feeSource.getText().toString().trim().isEmpty()) edit.putString("feeUrl", Policy.feeUrl(feeSource.getText().toString(), tor.isChecked()));
                 if (!edit.commit()) throw new Exception("Could not save connection.");
                 new WalletDialogBuilder().setTitle("Connection saved").setMessage("Restart the app to use this connection. Your wallet and channels are preserved.").setPositiveButton("OK", null).show();
