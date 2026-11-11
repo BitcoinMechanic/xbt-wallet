@@ -130,6 +130,8 @@ public final class MainActivity extends Activity {
             case "On chain funds": return this::utxos;
             case "Channels": return this::channelList;
             case "Peers": return this::peerList;
+            case "Wallets": return this::wallets;
+            case "Remote Control": return this::remoteControlIntro;
             case "Add peer": return () -> addPeer("");
             case "Swap controllers": return this::swapControllers;
             case "Search controllers": return this::controllerSearch;
@@ -184,6 +186,7 @@ public final class MainActivity extends Activity {
     private PopupMenu walletPopup;
     private NodeService node;
     private boolean bound, busy;
+    private String profile;
     private String screen = "";
     private android.animation.ValueAnimator onboardingReveal;
     private int historyTab;
@@ -239,7 +242,8 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
-        prefs = getSharedPreferences("wallet", 0);
+        profile = WalletProfiles.active(this);
+        prefs = WalletProfiles.settings(this, profile);
         if (BuildConfig.MAINNET_TEST && !prefs.contains("network")) {
             prefs.edit().putString("network", "mainnet").commit();
         }
@@ -249,7 +253,7 @@ public final class MainActivity extends Activity {
                 .putBoolean("dnsDiscoveryConfigured", true).commit();
         }
         if (BuildConfig.MAINNET_TEST && !prefs.getBoolean("modeChoiceMade", false)) modes();
-        else if (prefs.getString("mode", "").equals("easy")) start(); else modes();
+        else if ((prefs.getString("mode", "").equals("easy") || prefs.getString("mode", "").equals("remote"))) start(); else modes();
     }
     private void page(String title) {
         page(title, false);
@@ -573,16 +577,128 @@ public final class MainActivity extends Activity {
         node.io.execute(() -> { try { job.run(); } catch (Exception e) { runOnUiThread(() -> error(e)); }
             finally { runOnUiThread(() -> busy = false); } });
     }
+    private void wallets() {
+        page("Wallets");
+        text("Only the selected on-phone wallet runs. Switching stops its node; its channels are not monitored until you return. Remote nodes keep running independently.");
+        for (String id : WalletProfiles.ids(this)) {
+            android.content.SharedPreferences settings = WalletProfiles.settings(this, id);
+            String mode = settings.getString("mode", "");
+            String kind = mode.equals("remote") ? "Remote Control" : mode.equals("easy") ? "On this phone" : "Setup incomplete";
+            button(WalletProfiles.label(this, id) + " · " + kind + (id.equals(profile) ? " · Selected" : ""), () -> {
+                if (id.equals(profile)) { if (mode.isEmpty()) modes(); else home(); }
+                else switchWallet(id);
+            });
+        }
+        button("Create a new wallet", () -> {
+            try { switchWallet(WalletProfiles.create(this)); }
+            catch (Exception e) { error(e); }
+        });
+        button("Home", this::home);
+    }
+    private void switchWallet(String id) {
+        if (busy) return;
+        busy = true; handler.removeCallbacks(poll);
+        Runnable switchTask = () -> {
+            try {
+                if (node != null) node.stopForSwitch();
+                WalletProfiles.activate(this, id);
+                runOnUiThread(() -> {
+                    startActivity(new Intent(this, WalletRestartActivity.class)
+                        .putExtra("old_pid", android.os.Process.myPid()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    android.os.Process.killProcess(android.os.Process.myPid());
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> { busy = false; handler.postDelayed(poll, 5000); error(e); });
+            }
+        };
+        Toast.makeText(this, "Switching wallets…", Toast.LENGTH_LONG).show();
+        if (node != null) node.io.execute(switchTask); else new Thread(switchTask, "wallet-switch").start();
+    }
+    private java.util.function.Consumer<String> connectionScan;
+    private final TorTransport setupTor = NodeService.processTor;
+    private void remoteControlIntro() {
+        page("Remote Control");
+        text("This method requires you to have a Lightning node already set up on the XBT network and a way to connect your phone to it. Tor is supported, but will slow things down significantly. Connect via Start Tunnel, VPN in to your home network, or use Tailscale for a far better user experience.");
+        button("Continue", this::remoteConnection);
+        button("Back", this::modes);
+    }
+    private void remoteConnection() {
+        page("Remote node connection", true, this::remoteConnection);
+        text("Core Lightning · CLNrest");
+        text("Scan the CLNrest connection QR from Start9, or enter the connection details below. The API URL is different from the Lightning peer URI.");
+        String endpoint = "", runeValue = "", certificateValue = "", nodeIdValue = "";
+        try {
+            String saved = new Vault(this, profile).get("remote-config");
+            if (saved != null) {
+                org.json.JSONObject c = new org.json.JSONObject(saved);
+                endpoint = c.optString("endpoint"); runeValue = c.optString("rune"); certificateValue = c.optString("certificate"); nodeIdValue = c.optString("nodeId");
+            }
+        } catch (Exception e) { error(e); }
+        text("Wallet name"); EditText name = field("Optional", prefs.getString("wallet-name", ""));
+        name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(32)});
+        text("API URL"); EditText url = field("https://node:port", endpoint);
+        url.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        text("Node ID"); EditText nodeId = field("Optional — verified automatically", nodeIdValue);
+        text("Rune"); EditText rune = field("Core Lightning access rune", runeValue);
+        rune.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        rune.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        text("Server CA certificate"); EditText certificate = field("Optional — PEM for private HTTPS certificates", certificateValue);
+        certificate.setSingleLine(false); certificate.setMaxLines(4);
+        text("Onion URLs use Tor automatically. Direct URLs use your phone’s current network, VPN or tunnel. For private HTTPS, install your Start9 CA certificate on your phone or paste it above.");
+        java.util.function.Consumer<String> importConfig = raw -> {
+            try {
+                RemoteConnection config = RemoteConnection.parse(raw);
+                url.setText(config.endpoint); rune.setText(config.rune); certificate.setText(config.certificate); nodeId.setText(config.nodeId);
+                Toast.makeText(this, "Connection details imported. Check and connect below.", Toast.LENGTH_LONG).show();
+            } catch (Exception e) { error(e); }
+        };
+        Button scanConnection = button("Scan connection QR", () -> { connectionScan = importConfig; launchScanner("Scan Start9 CLNrest connection QR"); });
+        Button pasteConnection = button("Paste connection URI", () -> {
+            ClipData clip = getSystemService(android.content.ClipboardManager.class).getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) { error(new Exception("The clipboard is empty.")); return; }
+            importConfig.accept(clip.getItemAt(0).coerceToText(this).toString());
+        });
+        page.removeView(scanConnection); page.addView(scanConnection, 4);
+        page.removeView(pasteConnection); page.addView(pasteConnection, 5);
+        TextView status = text("");
+        button("Test and connect", () -> {
+            if (busy) return;
+            final RemoteConnection config;
+            try { config = new RemoteConnection(url.getText().toString(), rune.getText().toString(), certificate.getText().toString(), nodeId.getText().toString()); }
+            catch (Exception e) { error(e); return; }
+            final String label = name.getText().toString().trim();
+            busy = true; status.setText("Checking connection…");
+            new Thread(() -> {
+                try {
+                    if (config.onion) setupTor.start(this, message -> runOnUiThread(() -> status.setText(message)));
+                    ClnRemote client = new ClnRemote(config, prefs.getString("network", "mainnet"));
+                    String verified = client.verify();
+                    org.json.JSONObject saved = new org.json.JSONObject().put("endpoint", config.endpoint).put("rune", config.rune).put("certificate", config.certificate).put("nodeId", verified);
+                    // Existing embedded profiles can never be converted into remote profiles.
+                    if (prefs.getString("mode", "").equals("easy")) throw new Exception("Create a new wallet profile for Remote Control.");
+                    new Vault(this, profile).put("remote-config", saved.toString());
+                    if (!prefs.edit().putString("mode", "remote").putBoolean("modeChoiceMade", true).putString("wallet-name", label).commit()) throw new Exception("Could not save the remote wallet.");
+                    runOnUiThread(() -> {
+                        busy = false;
+                        if (node != null) switchWallet(profile); else start();
+                    });
+                } catch (Exception e) { runOnUiThread(() -> { busy = false; status.setText("Connection not saved."); error(e); }); }
+            }, "remote-connect").start();
+        });
+        button("Back", prefs.getString("mode", "").isEmpty() ? this::remoteControlIntro : this::advanced);
+    }
     private void modes() {
         page("Your Lightning Wallet");
-        text("Easy Mode runs your XBT Lightning wallet on this phone. Hard Mode will let you connect to your own Lightning node.");
+        text("Easy Mode runs your XBT Lightning wallet on this phone. Remote Control connects to your own Lightning node.");
         button("Easy Mode", this::setup);
-        Button hard = button("Hard Mode · coming later", () -> {}); hard.setEnabled(false);
+        button("Remote Control", this::remoteControlIntro);
+        if (WalletProfiles.ids(this).size() > 1) button("Wallets", this::wallets);
     }
     private void createWalletIntro() {
         page("Create your wallet", false, this::createWalletIntro);
         text("Your keys stay on this device. Back up the seed to recover on-chain funds; channel recovery also requires channel backups.");
         button("Create wallet", this::nameWallet);
+        if (WalletProfiles.ids(this).size() > 1) button("Wallets", this::wallets);
     }
     private void nameWallet() {
         page("Name your wallet", false, this::nameWallet);
@@ -593,6 +709,7 @@ public final class MainActivity extends Activity {
         name.setContentDescription("Wallet name, up to 32 characters");
         button("Continue", () -> finishWalletCreation(name.getText().toString().trim()));
         button("Not now", () -> finishWalletCreation(""));
+        if (WalletProfiles.ids(this).size() > 1) button("Wallets", this::wallets);
     }
     private void finishWalletCreation(String name) {
         work(() -> {
@@ -636,13 +753,14 @@ public final class MainActivity extends Activity {
         bound = bindService(intent, connection, BIND_AUTO_CREATE);
     }
     private void home() {
+        if (node == null && prefs.getString("mode", "").isEmpty()) { modes(); return; }
         // Keep the sync screen visible while the asynchronous status query runs.
         // Replacing it with Home here causes a flash on every startup poll.
         if ((screen.equals("Home") || screen.equals("Wallet is starting")) && node != null && node.rpcReady) { refresh(); return; }
         page("Home");
         if (node == null) { text("Connecting to node…"); return; }
         text(node.status);
-        if (!node.rpcReady) { button("Refresh", this::home); button("Node connection", this::nodeConnection); return; }
+        if (!node.rpcReady) { button("Wallets", this::wallets); button("Refresh", this::home); button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection); return; }
         button("Refresh wallet", this::refresh);
         refresh();
     }
@@ -1434,7 +1552,7 @@ public final class MainActivity extends Activity {
             if (!prefs.edit().putString(key, "Close requested. Check Channels for confirmation progress.").commit())
                 throw new Exception("Could not save close request.");
             runOnUiThread(() -> { if (!isDestroyed()) channelDetails(channel); });
-            lndmobile.Lndmobile.closeChannel(request.toByteArray(), new lndmobile.RecvStream() {
+            node.closeChannel(request.toByteArray(), new lndmobile.RecvStream() {
                 private volatile boolean terminal;
                 public void onResponse(byte[] data) {
                     try {
@@ -1458,10 +1576,9 @@ public final class MainActivity extends Activity {
         if (walletMenuAnchor == null || walletPopup != null) return;
         PopupMenu popup = new PopupMenu(this, walletMenuAnchor, Gravity.END);
         walletPopup = popup;
-        String[] labels = {"Payment history", "Fiat currency: " + prefs.getString("fiat-currency", "USD"),
-            "On chain funds", "Channels", "Peers", "Swap controllers", "Back up seed", "Test recovery", "Advanced"};
-        Runnable[] actions = {this::paymentHistory, this::fiatCurrency, this::utxos, this::channelList, this::peerList, this::swapControllers,
-            this::backup, this::testRecovery, this::advanced};
+        String[] labels = {"Wallets", "Payment history", "On chain funds", "Channels", "Peers", "Swap controllers", node != null && node.isRemote() ? "Node backup" : "Back up seed", "Advanced"};
+        Runnable[] actions = {this::wallets, this::paymentHistory, this::utxos, this::channelList, this::peerList, this::swapControllers,
+            this::backup, this::advanced};
         for (int i = 0; i < labels.length; i++) {
             android.text.SpannableString label = new android.text.SpannableString(labels[i]);
             label.setSpan(new android.text.style.RelativeSizeSpan(1.1f), 0, label.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -1530,7 +1647,7 @@ public final class MainActivity extends Activity {
                     () -> Toast.makeText(this, "Connecting to peer…", Toast.LENGTH_SHORT).show(), this::peerList);
             } catch (Exception e) { error(e); }
         });
-        button("Node connection", this::nodeConnection);
+        button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection);
         button("Back to peers", this::peerList);
     }
     private void connectPeerAddress(String publicKey, String suppliedAddress, Runnable started, Runnable complete) {
@@ -1760,8 +1877,10 @@ public final class MainActivity extends Activity {
         String walletName = prefs.getString("wallet-name", "");
         if (!walletName.isEmpty()) text("Wallet name: " + walletName);
         text(node == null ? "Node disconnected" : node.status);
-        button("Node connection", this::nodeConnection);
+        button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection);
         text("Fiat estimates use Neoxa XBT/USDC (BTCB2_USDC), treating 1 USDC as approximately 1 USD. Other currencies use Frankfurter reference rates. Stale or unavailable quotes display —. Regtest balances are test funds.");
+        button("Fiat currency: " + prefs.getString("fiat-currency", "USD"), this::fiatCurrency);
+        if (node == null || !node.isRemote()) button("Test recovery", this::testRecovery);
         button("Closed-channel history", this::closedChannels); button("Back", this::home);
     }
     private void nodeConnection() {
@@ -1816,7 +1935,7 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 page("Closed-channel history");
                 if (closed.getChannelsCount() == 0) text("No closed channels.");
-                for (LightningOuterClass.ChannelCloseSummary c : closed.getChannelsList()) text(channelLabelPrefix(c.getChannelPoint()) + displayAmount(c.getCapacity()) + " · " + c.getCloseType().name() + "\n" + c.getChannelPoint());
+                for (LightningOuterClass.ChannelCloseSummary c : closed.getChannelsList()) text(channelLabelPrefix(c.getChannelPoint()) + displayAmount(c.getCapacity()) + " · " + (node.isRemote() ? "Closed" : c.getCloseType().name()) + "\n" + c.getChannelPoint());
                 button("Back", this::advanced);
             });
         });
@@ -1893,7 +2012,7 @@ public final class MainActivity extends Activity {
         for (Map.Entry<Long, List<HistoryEntry>> entry : history.entrySet())
             for (HistoryEntry item : entry.getValue()) {
                 String label = prefs.getString(item.labelKey, item.fallbackLabel);
-                Button row = button(date.format(new Date(entry.getKey() * 1000)) + "\n" + historyLabel(label) + item.details,
+                Button row = button((entry.getKey() > 0 ? date.format(new Date(entry.getKey() * 1000)) : "Date unavailable") + "\n" + historyLabel(label) + item.details,
                     () -> editHistoryLabel(item, () -> renderPaymentHistory(onChain, lightning, limited)));
                 row.setAllCaps(false); row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
                 row.setContentDescription(row.getText() + ". Tap to edit label.");
@@ -1902,6 +2021,7 @@ public final class MainActivity extends Activity {
         button("Refresh", this::paymentHistory); button("Back", this::home);
     }
     private void backup() {
+        if (node != null && node.isRemote()) { error(new Exception("Back up the seed and channels on your remote node. This phone holds connection credentials, not its seed.")); return; }
         page("Before you view your seed", true);
         text("Warning! Anyone who knows this seed has access to your funds.");
         text("Recovery from these words will not restore your Lightning channels. Recovering channel funds on chain requires a separate channel backup and help from your channel peers. This alpha does not yet support that recovery process.");
@@ -1909,7 +2029,7 @@ public final class MainActivity extends Activity {
         button("I understand · Show seed", this::showSeed);
     }
     private void showSeed() {
-        try { String seed = new Vault(this).get("seed");
+        try { String seed = new Vault(this, profile).get("seed");
             page("Back up your seed", true);
             if (seed == null) text("Create your wallet first.");
             else {
@@ -1921,7 +2041,7 @@ public final class MainActivity extends Activity {
     }
     private void testRecovery() {
         try {
-            String saved = new Vault(this).get("seed");
+            String saved = new Vault(this, profile).get("seed");
             page("Test recovery", true);
             if (saved == null) { text("Create your wallet first."); button("Back", this::home); return; }
             text("Enter the words from your backup in order. This checks them against this wallet's seed; it does not restore a wallet or test Lightning channel recovery.");
@@ -1941,7 +2061,7 @@ public final class MainActivity extends Activity {
                 try {
                     List<String> entered = new ArrayList<>();
                     for (EditText entry : entries) entered.add(entry.getText().toString().trim());
-                    String expected = new Vault(this).get("seed");
+                    String expected = new Vault(this, profile).get("seed");
                     if (!SeedCheck.matches(expected, entered)) {
                         new WalletDialogBuilder().setTitle("Backup does not match")
                             .setMessage("Check that every word is entered in the correct numbered position.")
@@ -2840,7 +2960,7 @@ public final class MainActivity extends Activity {
             .setPaymentRequest(raw).setFeeLimitSat(feeLimit).setTimeoutSeconds(30).setMaxParts(1);
         if (pay.getNumMsat() == 0) request.setAmtMsat(msats);
         runOnUiThread(() -> { page("Payment submitted"); text("Waiting for the node to report settlement. Closing this screen does not cancel the payment."); button("Home", this::home); });
-        lndmobile.Lndmobile.routerSendPaymentV2(request.build().toByteArray(), new lndmobile.RecvStream() {
+        node.sendPayment(request.build().toByteArray(), new lndmobile.RecvStream() {
             private volatile boolean terminal;
             public void onResponse(byte[] data) {
                 try {
@@ -2880,6 +3000,11 @@ public final class MainActivity extends Activity {
         super.onActivityResult(request, result, data);
         com.google.zxing.integration.android.IntentResult scan = com.google.zxing.integration.android.IntentIntegrator.parseActivityResult(request, result, data);
         if (scan == null) return;
+        if (connectionScan != null) {
+            java.util.function.Consumer<String> consume = connectionScan; connectionScan = null;
+            if (scan.getContents() != null) consume.accept(scan.getContents().trim());
+            return;
+        }
         boolean routePayment = scanPayment;
         EditText target = scanTarget;
         scanPayment = false;

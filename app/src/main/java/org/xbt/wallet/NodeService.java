@@ -23,13 +23,20 @@ public final class NodeService extends Service {
     public volatile boolean rpcReady;
     public volatile boolean supportsOnionPeers;
     private boolean started;
+    private String profile;
+    private boolean stopped;
+    private ClnRemote remote;
+    private final java.util.concurrent.atomic.AtomicInteger activeStreams = new java.util.concurrent.atomic.AtomicInteger();
+    public boolean isRemote() { return WalletProfiles.settings(this, profile).getString("mode", "").equals("remote"); }
     private final SyncProgress sync = new SyncProgress();
     private long syncLogOffset;
-    private final TorTransport tor = new TorTransport();
+    static final TorTransport processTor = new TorTransport();
+    private final TorTransport tor = processTor;
     public final class LocalBinder extends Binder { NodeService service() { return NodeService.this; } }
     @Override public IBinder onBind(Intent intent) { return new LocalBinder(); }
     @Override public void onCreate() {
         super.onCreate();
+        profile = WalletProfiles.active(this);
         NotificationManager notifications = getSystemService(NotificationManager.class);
         notifications.createNotificationChannel(new NotificationChannel("node", "XBT node", NotificationManager.IMPORTANCE_LOW));
         PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
@@ -43,13 +50,22 @@ public final class NodeService extends Service {
     }
     private void startNode() {
         try {
-            SharedPreferences prefs = getSharedPreferences("wallet", 0);
+            SharedPreferences prefs = WalletProfiles.settings(this, profile);
+            if (isRemote()) {
+                org.json.JSONObject saved = new org.json.JSONObject(new Vault(this, profile).get("remote-config"));
+                RemoteConnection config = new RemoteConnection(saved.getString("endpoint"), saved.getString("rune"), saved.optString("certificate"), saved.getString("nodeId"));
+                if (config.onion) tor.start(this, message -> status = message);
+                status = "Connecting to your remote node…";
+                ClnRemote client = new ClnRemote(config, prefs.getString("network", "mainnet"));
+                client.verify(); remote = client; supportsOnionPeers = true; rpcReady = true;
+                status = "Remote Core Lightning connected"; return;
+            }
             // Network cannot be changed once secrets are created. Separate directory adds a second boundary.
             String network = prefs.getString("network", "regtest");
             String configuredPeer = prefs.getString("syncPeer", network.equals("mainnet") ? "" : "10.0.2.2:19444").trim();
             String peer = configuredPeer.isEmpty() && network.equals("mainnet") ? "" : Policy.endpoint(configuredPeer);
             if (!network.equals("regtest") && !network.equals("mainnet")) throw new Exception("Unsupported network");
-            File directory = new File(getFilesDir(), "node-" + network);
+            File directory = WalletProfiles.directory(this, profile, network);
             if (!directory.exists() && !directory.mkdirs()) throw new Exception("Cannot create node directory");
             String args = "--lnddir=" + directory.getAbsolutePath() + " --bitcoin.active --bitcoin." + network
                     + " --bitcoin.node=neutrino" + (peer.isEmpty() ? "" : " --neutrino.connect=" + peer)
@@ -84,8 +100,8 @@ public final class NodeService extends Service {
         } catch (Exception e) { status = e.getMessage(); }
     }
     public SyncProgress syncProgress() {
-        String network = getSharedPreferences("wallet", 0).getString("network", "regtest");
-        File log = new File(getFilesDir(), "node-" + network + "/logs/bitcoin/" + network + "/lnd.log");
+        String network = WalletProfiles.settings(this, profile).getString("network", "regtest");
+        File log = new File(WalletProfiles.directory(this, profile, network), "logs/bitcoin/" + network + "/lnd.log");
         try (java.io.RandomAccessFile input = new java.io.RandomAccessFile(log, "r")) {
             if (input.length() < syncLogOffset) syncLogOffset = 0;
             input.seek(syncLogOffset);
@@ -110,6 +126,10 @@ public final class NodeService extends Service {
         }
     }
     public byte[] rpc(String method, MessageLite request) throws Exception {
+        if (isRemote()) {
+            if (remote == null) throw new Exception("Remote node is not connected. Check Remote Control settings.");
+            return remote.rpc(method, request);
+        }
         CompletableFuture<byte[]> result = new CompletableFuture<>();
         Callback callback = new Callback() {
             public void onResponse(byte[] value) { result.complete(value == null ? new byte[0] : value); }
@@ -121,17 +141,18 @@ public final class NodeService extends Service {
         catch (TimeoutException e) { throw new Exception("Node response timed out. Check status before trying again."); }
     }
     public Stateservice.WalletState walletState() throws Exception {
+        if (isRemote()) return rpcReady ? Stateservice.WalletState.SERVER_ACTIVE : Stateservice.WalletState.WAITING_TO_START;
         return Stateservice.GetStateResponse.parseFrom(rpc("getState", Stateservice.GetStateRequest.getDefaultInstance())).getState();
     }
     public void unlock() throws Exception {
-        String secret = new Vault(this).get("password");
+        String secret = new Vault(this, profile).get("password");
         if (secret == null) throw new Exception("Wallet password is unavailable on this device.");
         rpc("unlockWallet", Walletunlocker.UnlockWalletRequest.newBuilder()
                 .setWalletPassword(ByteString.copyFromUtf8(secret)).build());
     }
     public void createWallet() throws Exception {
         if (walletState() != Stateservice.WalletState.NON_EXISTING) throw new Exception("A wallet already exists.");
-        Vault vault = new Vault(this);
+        Vault vault = new Vault(this, profile);
         String words = vault.get("seed");
         if (words == null) {
             Walletunlocker.GenSeedResponse seed = Walletunlocker.GenSeedResponse.parseFrom(rpc("genSeed", Walletunlocker.GenSeedRequest.getDefaultInstance()));
@@ -148,9 +169,51 @@ public final class NodeService extends Service {
         rpc("initWallet", Walletunlocker.InitWalletRequest.newBuilder().setWalletPassword(ByteString.copyFromUtf8(password))
                 .addAllCipherSeedMnemonic(Arrays.asList(words.split(" "))).build());
     }
+    public void stopForSwitch() throws Exception {
+        if (activeStreams.get() > 0) throw new Exception("An operation is still awaiting a node response. Wait for it to finish before switching wallets.");
+        if (isRemote()) { rpcReady = false; stopped = true; tor.close(this); return; }
+        if (rpcReady && walletState() == Stateservice.WalletState.SERVER_ACTIVE) {
+            lnrpc.LightningOuterClass.ListChannelsResponse channels = lnrpc.LightningOuterClass.ListChannelsResponse.parseFrom(rpc("listChannels", lnrpc.LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
+            for (lnrpc.LightningOuterClass.Channel channel : channels.getChannelsList()) if (channel.getPendingHtlcsCount() > 0)
+                throw new Exception("This wallet has a payment in flight. Wait for settlement before switching wallets.");
+        }
+        CompletableFuture<Void> done = new CompletableFuture<>();
+        Lndmobile.stopRuntime(new Callback() {
+            public void onResponse(byte[] value) { done.complete(null); }
+            public void onError(Exception e) { done.completeExceptionally(e); }
+        });
+        try { done.get(65, TimeUnit.SECONDS); }
+        catch (ExecutionException e) { throw new Exception("Could not safely stop this wallet: " + e.getCause().getMessage()); }
+        catch (TimeoutException e) { throw new Exception("Wallet shutdown is still pending. The selected wallet was not changed."); }
+        rpcReady = false; stopped = true; tor.close(this);
+    }
+    public void sendPayment(byte[] request, lndmobile.RecvStream callback) {
+        activeStreams.incrementAndGet();
+        if (isRemote()) io.execute(() -> {
+            try { callback.onResponse(remote.pay(routerrpc.RouterOuterClass.SendPaymentRequest.parseFrom(request)).toByteArray()); }
+            catch (Exception e) { callback.onError(e); } finally { activeStreams.decrementAndGet(); }
+        });
+        else Lndmobile.routerSendPaymentV2(request, new lndmobile.RecvStream() {
+            private boolean done;
+            public void onResponse(byte[] data) {
+                try { lnrpc.LightningOuterClass.Payment p = lnrpc.LightningOuterClass.Payment.parseFrom(data);
+                    if (!done && (p.getStatus() == lnrpc.LightningOuterClass.Payment.PaymentStatus.SUCCEEDED || p.getStatus() == lnrpc.LightningOuterClass.Payment.PaymentStatus.FAILED)) { done = true; activeStreams.decrementAndGet(); }
+                    callback.onResponse(data);
+                } catch (Exception e) { onError(e); }
+            }
+            public void onError(Exception e) { if (!done) { done = true; activeStreams.decrementAndGet(); } callback.onError(e); }
+        });
+    }
+    public void closeChannel(byte[] request, lndmobile.RecvStream callback) {
+        if (isRemote()) {
+            activeStreams.incrementAndGet();
+            io.execute(() -> { try { callback.onResponse(remote.close(lnrpc.LightningOuterClass.CloseChannelRequest.parseFrom(request)).toByteArray()); }
+                catch (Exception e) { callback.onError(e); } finally { activeStreams.decrementAndGet(); } });
+        } else Lndmobile.closeChannel(request, callback);
+    }
     @Override public void onDestroy() {
         // Android may kill a service without this callback. LND's database remains the source of truth.
-        io.execute(() -> { try { rpc("stopDaemon", lnrpc.LightningOuterClass.StopRequest.getDefaultInstance()); } catch (Exception ignored) {} finally { tor.close(this); } });
+        io.execute(() -> { try { if (!stopped && !isRemote()) rpc("stopDaemon", lnrpc.LightningOuterClass.StopRequest.getDefaultInstance()); } catch (Exception ignored) {} finally { tor.close(this); } });
         io.shutdown(); super.onDestroy();
     }
 }

@@ -1,0 +1,75 @@
+diff --git a/mobile/bindings.go b/mobile/bindings.go
+index e5fe5f71f..690aab7a4 100644
+--- a/mobile/bindings.go
++++ b/mobile/bindings.go
+@@ -9,6 +9,7 @@ import (
+ 	"os"
+ 	"strings"
+ 	"sync/atomic"
++	"time"
+ 
+ 	flags "github.com/jessevdk/go-flags"
+ 	"github.com/lightningnetwork/lnd"
+@@ -21,6 +22,8 @@ import (
+ // attempted to be started at once.
+ var lndStarted int32
+ 
++var activeShutdown atomic.Pointer[signal.Interceptor]
++
+ // Start starts lnd in a new goroutine.
+ //
+ // extraArgs can be used to pass command line arguments to lnd that will
+@@ -78,6 +81,8 @@ func Start(extraArgs string, rpcReady Callback) {
+ 
+ 	// Load the configuration, and parse the extra arguments as command
+ 	// line options. This function will also set up logging properly.
++	activeShutdown.Store(&shutdownInterceptor)
++
+ 	loadedConfig, err := lnd.LoadConfig(shutdownInterceptor)
+ 	if err != nil {
+ 		atomic.StoreInt32(&lndStarted, 0)
+@@ -107,6 +112,7 @@ func Start(extraArgs string, rpcReady Callback) {
+ 	// be executed in the case of a graceful shutdown.
+ 	go func() {
+ 		defer atomic.StoreInt32(&lndStarted, 0)
++		defer activeShutdown.Store(nil)
+ 		defer close(quit)
+ 
+ 		if err := lnd.Main(
+@@ -156,3 +162,36 @@ func Start(extraArgs string, rpcReady Callback) {
+ 		rpcReady.OnResponse([]byte{})
+ 	}()
+ }
++
++// StopRuntime stops even a locked or uninitialized wallet and reports only
++// after lnd.Main has returned and closed its databases. The Android host uses
++// a fresh process for the next profile; it never relies on global RPC reuse.
++func StopRuntime(callback Callback) {
++	go func() {
++		if atomic.LoadInt32(&lndStarted) == 0 {
++			callback.OnResponse([]byte{})
++			return
++		}
++		interceptor := activeShutdown.Load()
++		if interceptor == nil {
++			callback.OnError(errors.New("node startup has not reached a stoppable state"))
++			return
++		}
++		interceptor.RequestShutdown()
++		deadline := time.After(60 * time.Second)
++		ticker := time.NewTicker(50 * time.Millisecond)
++		defer ticker.Stop()
++		for {
++			select {
++			case <-ticker.C:
++				if atomic.LoadInt32(&lndStarted) == 0 {
++					callback.OnResponse([]byte{})
++					return
++				}
++			case <-deadline:
++				callback.OnError(errors.New("node is still shutting down; wallet was not switched"))
++				return
++			}
++		}
++	}()
++}

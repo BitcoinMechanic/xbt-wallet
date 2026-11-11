@@ -23,7 +23,8 @@ final class TorTransport {
         }
         public void onServiceDisconnected(ComponentName name) { service = null; httpPort = 0; socksPort = 0; }
     };
-    int start(Context context, Consumer<String> status) throws Exception {
+    synchronized int start(Context context, Consumer<String> status) throws Exception {
+        context = context.getApplicationContext();
         status.accept("Connecting to Tor…");
         if (!bound) {
             try (FileOutputStream file = new FileOutputStream(TorService.getTorrc(context))) {
@@ -61,7 +62,8 @@ final class TorTransport {
         if (port <= 0) throw new Exception("Tor is not ready");
         return new Proxy(Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", port));
     }
-    void close(Context context) {
+    synchronized void close(Context context) {
+        context = context.getApplicationContext();
         httpPort = 0; socksPort = 0;
         if (bound) { context.unbindService(connection); bound = false; }
     }
