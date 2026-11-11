@@ -331,6 +331,8 @@ public final class MainActivity extends Activity {
         View.OnClickListener toggleRate = v -> {
             prefs.edit().putBoolean("header-fiat-rate", !prefs.getBoolean("header-fiat-rate", false)).apply();
             if (headerSlideAnimation != null) headerSlideAnimation.cancel();
+            headerSlideAnimation = null;
+            updateHeaderRate();
             headerSlideAnimation = android.animation.ValueAnimator.ofFloat(headerSlide, prefs.getBoolean("header-fiat-rate", false) ? 1f : 0f);
             headerSlideAnimation.setDuration(500);
             headerSlideAnimation.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
@@ -338,13 +340,23 @@ public final class MainActivity extends Activity {
                 headerSlide = (float) animation.getAnimatedValue();
                 positionHeaderRate();
             });
+            headerSlideAnimation.addListener(new android.animation.AnimatorListenerAdapter() {
+                private boolean cancelled;
+                @Override public void onAnimationCancel(android.animation.Animator animation) { cancelled = true; }
+                @Override public void onAnimationEnd(android.animation.Animator animation) {
+                    if (!cancelled) {
+                        headerSlideAnimation = null;
+                        updateHeaderRate();
+                    }
+                }
+            });
             headerSlideAnimation.start();
-            updateHeaderRate();
             if (prefs.getBoolean("header-fiat-rate", false) && !prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         };
         brand.setOnClickListener(toggleRate); headerRate.setOnClickListener(toggleRate);
         updateHeaderRate();
-        if (prefs.getBoolean("header-fiat-rate", false) && !prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
+        // Warm the quote while the price is off-screen, before the first logo tap.
+        if (!prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         if (title.equals("Home")) {
             Button menu = new Button(this); styleButton(menu, false);
             menu.setText("⋮"); menu.setTextSize(27.5f); menu.setPadding(0, 0, 0, 0);
@@ -383,6 +395,8 @@ public final class MainActivity extends Activity {
     }
     private void updateHeaderRate() {
         if (headerBrand == null || headerRate == null) return;
+        // Changing text can trigger auto-sizing and layout. Keep one stable price throughout a slide.
+        if (headerSlideAnimation != null && headerSlideAnimation.isStarted()) return;
         positionHeaderRate();
         String currency = prefs.getString("fiat-currency", "USD");
         java.math.BigDecimal price = amountPrice();
@@ -396,13 +410,14 @@ public final class MainActivity extends Activity {
             format.setMinimumFractionDigits(decimals); format.setMaximumFractionDigits(decimals);
             value = format.format(price) + "\n/XBT";
         }
-        headerRate.setText(value);
+        if (!value.contentEquals(headerRate.getText())) headerRate.setText(value);
         headerRate.setContentDescription(value + ". Tap to show the XBT logo.");
     }
     private void positionHeaderRate() {
         headerBrand.invalidate();
         headerRate.setTranslationX((1f - headerSlide) * dp(126.5f));
-        headerRate.setVisibility(headerSlide == 0 ? View.INVISIBLE : View.VISIBLE);
+        // Keep it laid out from the first frame; the viewport clips it completely at slide=0.
+        headerRate.setImportantForAccessibility(headerSlide == 0 ? View.IMPORTANT_FOR_ACCESSIBILITY_NO : View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         headerBrand.setContentDescription(headerSlide >= .5f
             ? "Tap to show the XBT logo." : "XBT. Tap to show the fiat exchange rate.");
     }
