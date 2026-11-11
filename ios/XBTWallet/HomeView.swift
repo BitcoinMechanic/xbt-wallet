@@ -67,7 +67,7 @@ struct HomeView: View {
                         ForEach(wallet.pending, id: \.pendingID) { item in
                             VStack(alignment: .leading) {
                                 HStack { Text("Confirming channel"); Spacer(); Circle().fill(.orange).frame(width: 9, height: 9) }
-                                Text("Confirmations needed: \(item.int("confirmations"))/\(item.int("confirmation_height") > 0 ? "block \(item.int("confirmation_height"))" : "pending")").font(.caption).foregroundStyle(.secondary)
+                                Text("Confirmations remaining: \(item.int("confirmations_until_active"))").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         NavigationLink("Open channel") { OpenChannelView() }.font(.subheadline)
@@ -177,7 +177,7 @@ struct ChannelDetail: View {
                     let pieces = channel.channelID.split(separator: ":")
                     guard pieces.count == 2, let index = UInt32(pieces[1]), let store = wallet.store else { throw WalletError("Invalid funding output.") }
                     let id = try store.begin("close-channel", reference: channel.channelID)
-                    for try await event in wallet.rpc.stream("closeChannel", ["channel_point": ["funding_txid_str": String(pieces[0]), "output_index": index], "force": false]) {
+                    for try await event in try wallet.rpc.stream("closeChannel", ["channel_point": ["funding_txid_str": String(pieces[0]), "output_index": index], "force": false]) {
                         if event.fields["close_pending"] != nil || event.fields["chan_close"] != nil {
                             try store.finish(id, state: "succeeded", result: "Cooperative close submitted")
                             result = "Closing transaction submitted. Check payment history for confirmation."

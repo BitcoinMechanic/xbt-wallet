@@ -18,7 +18,13 @@ jobs:
           cache-dependency-path: ios/Native/dependencies.lock
       - name: Install protobuf compiler
         run: brew install protobuf xcodegen
+      - uses: actions/cache@v4
+        id: engine-cache
+        with:
+          path: ios/Frameworks/Lndmobile.xcframework
+          key: ios-engine-${{ runner.arch }}-${{ hashFiles('ios/Native/**', 'scripts/build-ios-node.sh', 'patches/**') }}
       - name: Build the pinned XBT Lightning engine for iPhone and simulator
+        if: steps.engine-cache.outputs.cache-hit != 'true'
         run: scripts/build-ios-node.sh
       - uses: actions/upload-artifact@v4
         with:

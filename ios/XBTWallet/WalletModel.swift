@@ -26,8 +26,8 @@ import SwiftUI
         guard let date = rateDate, Date().timeIntervalSince(date) < 900 else { return nil }
         return usdRate
     }
-    var local: Int64 { channels.reduce(0) { $0 + max(0, $1.int("local_balance") - $1.object("local_constraints").int("chan_reserve_sat")) } }
-    var remote: Int64 { channels.reduce(0) { $0 + max(0, $1.int("remote_balance") - $1.object("remote_constraints").int("chan_reserve_sat")) } }
+    var local: Int64 { channels.filter { $0.bool("active") }.reduce(0) { $0 + max(0, $1.int("local_balance") - $1.object("local_constraints").int("chan_reserve_sat")) } }
+    var remote: Int64 { channels.filter { $0.bool("active") }.reduce(0) { $0 + max(0, $1.int("remote_balance") - $1.object("remote_constraints").int("chan_reserve_sat")) } }
     func display(_ sats: Int64) -> String { Amounts.format(sats, unit: unit, usdRate: currentRate) }
     func cycleUnit() {
         let units = AmountUnit.allCases
@@ -63,6 +63,7 @@ import SwiftUI
                     while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
                         guard let self else { return }
+                        if self.busy || self.phase == .welcome { continue }
                         do { try await self.updateState() }
                         catch { self.status = error.localizedDescription }
                     }
@@ -168,7 +169,7 @@ import SwiftUI
             "fee_limit_sat": String(max(1, sats / 100)), "no_inflight_updates": false]
         if decoded.int("num_msat") == 0 { params["amt"] = String(sats) }
         do {
-            for try await result in rpc.stream("sendPayment", params) {
+            for try await result in try rpc.stream("sendPayment", params) {
                 if result.text("status") == "SUCCEEDED" {
                     try store.finish(id, state: "succeeded", result: result.text("payment_hash"))
                     return result
@@ -186,6 +187,9 @@ import SwiftUI
         let features = reply.object("features").fields
         guard features["512"] != nil || features["513"] != nil else {
             throw WalletError("This is a BTC invoice. Automatic swaps have not yet been ported to iPhone; it cannot be paid directly from XBT.")
+        }
+        guard reply.int("num_msat") % 1000 == 0 else {
+            throw WalletError("This invoice requires a fractional satoshi amount. This iPhone preview currently supports whole-satoshi payments only.")
         }
         let deadline = reply.int("timestamp") + reply.int("expiry")
         guard deadline > Int64(Date().timeIntervalSince1970) else { throw WalletError("This invoice has expired. Request a fresh invoice.") }

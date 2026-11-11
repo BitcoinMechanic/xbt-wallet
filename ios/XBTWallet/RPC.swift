@@ -26,7 +26,7 @@ struct Reply {
     func array(_ key: String) -> [Reply] { (fields[key] as? [[String: Any]] ?? []).map(Reply.init) }
 }
 
-private final class Callback: NSObject, LndmobileCallbackProtocol {
+private final class Callback: NSObject, LndmobileCallbackProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private var completed = false
     private let receive: (Result<Data, Error>) -> Void

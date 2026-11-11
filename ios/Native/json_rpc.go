@@ -37,6 +37,10 @@ func JSONCall(method, input string, callback Callback) {
 		request = &lnrpc.GetInfoRequest{}
 		response = func() proto.Message { return &lnrpc.GetInfoResponse{} }
 		invoke = GetInfo
+	case "exportAllChannelBackups":
+		request = &lnrpc.ChanBackupExportRequest{}
+		response = func() proto.Message { return &lnrpc.ChanBackupSnapshot{} }
+		invoke = ExportAllChannelBackups
 	case "walletBalance":
 		request = &lnrpc.WalletBalanceRequest{}
 		response = func() proto.Message { return &lnrpc.WalletBalanceResponse{} }

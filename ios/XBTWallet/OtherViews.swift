@@ -136,9 +136,24 @@ extension Data {
 struct AdvancedView: View {
     @EnvironmentObject var wallet: WalletModel
     @State private var name = ""
+    @State private var backup: URL?
     var body: some View {
         Page(title: "Advanced") {
             NavigationLink("Back up seed") { SeedView() }
+            Button("Export channel backup") {
+                wallet.perform {
+                    guard let store = wallet.store else { throw WalletError("Wallet storage is unavailable.") }
+                    let reply = try await wallet.rpc.call("exportAllChannelBackups")
+                    guard let data = Data(base64Encoded: reply.object("multi_chan_backup").text("multi_chan_backup")), !data.isEmpty else {
+                        throw WalletError("The node returned no channel backup.")
+                    }
+                    let file = store.directory.appendingPathComponent("channel.backup")
+                    try data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    backup = file
+                }
+            }
+            if let backup { ShareLink("Save channel backup", item: backup) }
+            Text("Save a new channel backup after opening or closing channels. Recovery needs both the seed and a channel backup; it cannot restore a live channel in place.").font(.footnote).foregroundStyle(.secondary)
             Field(title: "Wallet name", placeholder: "Optional", text: $name).onChange(of: name) { name = String($0.prefix(32)) }
             Button("Save name") { wallet.name = name; UserDefaults.standard.set(name, forKey: "walletName") }.buttonStyle(WalletButton())
             Text("iPhone preview · XBT mainnet\nThis build uses direct network connections. Tor, Remote Control, multiple wallets and automatic swaps are not yet available on iOS.")
