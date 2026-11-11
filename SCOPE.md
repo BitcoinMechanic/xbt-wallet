@@ -54,11 +54,11 @@ Proposals — not yet accepted:
 - Keep the deposit address accessible from home, allow leaving the waiting screen, and persist opening attempts across restart to prevent duplicate submissions.
 - Define directory hosting, identity validation, freshness, outage handling, and recommendation criteria. Lightning channel peers remain distinct from swap providers and chain-sync peers.
 
-### Hard Mode — remote node control
+### Remote Control — remote node control
 
 - Ask the user to connect a remote Lightning node.
 - Act as a control interface for that remote node rather than starting an embedded node for this mode.
-- Supported remote node implementations, connection/authentication methods, and available controls remain to be specified.
+- Core Lightning CLNrest is implemented. **Backlog: add Remote Control support for Paul Lamb’s LND fork (`paulscode/lightning-fork`)**, including authenticated connection forms/QR import, TLS and Tor, XBT chain identity checks, and wallet/channel/payment controls. Embedded support for this fork already exists; this backlog item is specifically for remote connections.
 - Whether Hard Mode includes the same swap-provider features as Easy Mode remains open.
 
 ### Multiple chains
@@ -589,3 +589,5 @@ The user's core concern is poor adherence to specifications and unexplained, app
 - Connection credentials are encrypted per profile. Direct connections require validated HTTPS; installed Android user CAs or a per-profile PEM CA support Start9. Onion HTTP uses app-owned Tor with unresolved DNS and no direct fallback. Redirects and automatic write retries are disabled. Connect checks node identity, network, and XBT invoice feature bits before saving; subsequent launches recheck them. Remote mode never starts/stops a remote daemon or uses the embedded runtime to send payments. Seed backup remains a remote-node responsibility.
 - CLN translation covers balances, outputs, channels/peers, invoices, payments, transaction history, selected-input on-chain sends/funding and cooperative close. Close explicitly sets `unilateraltimeout=0`, so lack of a reply cannot trigger an automatic timed force-close. Recipient validation prepares then discards an unsigned CLN transaction; a lost reply requires reconciliation, not a blind retry. CLN transaction timestamps/close types are not invented where its API does not provide them. Remote fee previews retain the app's estimated-fee semantics; additional live remote-send/funding/close testing is still needed.
 - Validation: disposable `-PisolatedTest=true` app (org.xbt.wallet.profiletest), never the funded app, created independent regtest wallets, verified different seeds/identities, returned to the first identity, and gracefully stopped an uninitialized node. UI Create a new wallet exercised the real process-switch path and returned to mode selection; Remote Control intro/form checked. Live read-only HTTPS test against the XBT Start9 CLN verified balances, channels, peers, histories and invoice decoding; rejected identity/network/certificate mismatches. Three fake-transport mutation contract tests covered amountless invoices, payment units/maxfee, selected-input send/funding, prepare/discard and cooperative-close bounds. No mainnet payment or channel mutation was made for this task.
+
+- Embedded compatibility verified 2026-11-10: the build uses `paulscode/lightning-fork` at `aa3f4a4e7c1fbad1b291b5acfe83e2b362d2fd56` plus the tracked mobile patches. Its dependencies use Paul’s BLAKE2b btcd, btcwallet and Neutrino forks. The installed mainnet wallet logged successful chain identification at block 961640 (164-byte v2 header), and earlier funded integration tests exercised XBT channels/payments. Back up seed moved from the dots menu into Advanced; the initial wallet-created backup offer remains.

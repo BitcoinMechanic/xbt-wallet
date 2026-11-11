@@ -1576,9 +1576,8 @@ public final class MainActivity extends Activity {
         if (walletMenuAnchor == null || walletPopup != null) return;
         PopupMenu popup = new PopupMenu(this, walletMenuAnchor, Gravity.END);
         walletPopup = popup;
-        String[] labels = {"Wallets", "Payment history", "On chain funds", "Channels", "Peers", "Swap controllers", node != null && node.isRemote() ? "Node backup" : "Back up seed", "Advanced"};
-        Runnable[] actions = {this::wallets, this::paymentHistory, this::utxos, this::channelList, this::peerList, this::swapControllers,
-            this::backup, this::advanced};
+        String[] labels = {"Wallets", "Payment history", "On chain funds", "Channels", "Peers", "Swap controllers", "Advanced"};
+        Runnable[] actions = {this::wallets, this::paymentHistory, this::utxos, this::channelList, this::peerList, this::swapControllers, this::advanced};
         for (int i = 0; i < labels.length; i++) {
             android.text.SpannableString label = new android.text.SpannableString(labels[i]);
             label.setSpan(new android.text.style.RelativeSizeSpan(1.1f), 0, label.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -1880,6 +1879,7 @@ public final class MainActivity extends Activity {
         button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection);
         text("Fiat estimates use Neoxa XBT/USDC (BTCB2_USDC), treating 1 USDC as approximately 1 USD. Other currencies use Frankfurter reference rates. Stale or unavailable quotes display —. Regtest balances are test funds.");
         button("Fiat currency: " + prefs.getString("fiat-currency", "USD"), this::fiatCurrency);
+        button(node != null && node.isRemote() ? "Node backup" : "Back up seed", this::backup);
         if (node == null || !node.isRemote()) button("Test recovery", this::testRecovery);
         button("Closed-channel history", this::closedChannels); button("Back", this::home);
     }
