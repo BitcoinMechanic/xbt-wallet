@@ -1,0 +1,109 @@
+diff --git a/funding/manager.go b/funding/manager.go
+index 4bf96da11..ee418cc4d 100644
+--- a/funding/manager.go
++++ b/funding/manager.go
+@@ -777,7 +777,7 @@ func (f *Manager) start() error {
+ 				chanType.HasFundingTx() &&
+ 				channel.IsInitiator {
+ 
+-				f.rebroadcastFundingTx(channel)
++				f.rebroadcastFundingTxAsync(channel)
+ 			}
+ 		} else if channel.ChanType.IsSingleFunder() &&
+ 			channel.ChanType.HasFundingTx() &&
+@@ -787,7 +787,7 @@ func (f *Manager) start() error {
+ 			// Rebroadcast the funding transaction for unconfirmed
+ 			// zero-conf channels if we have the funding tx and are
+ 			// also the initiator.
+-			f.rebroadcastFundingTx(channel)
++			f.rebroadcastFundingTxAsync(channel)
+ 		}
+ 
+ 		// We will restart the funding state machine for all channels,
+@@ -818,6 +818,24 @@ func (f *Manager) Stop() error {
+ 	return nil
+ }
+ 
++// rebroadcastFundingTxAsync keeps pending-channel recovery from blocking the
++// server's startup on a slow chain backend. The original transaction is reused;
++// confirmation tracking continues independently and no new funding is created.
++func (f *Manager) rebroadcastFundingTxAsync(c *channeldb.OpenChannel) {
++	f.wg.Add(1)
++	go func() {
++		defer f.wg.Done()
++		select {
++		case <-f.quit:
++			return
++		default:
++		}
++		log.Infof("Rebroadcasting pending channel funding in background: %v", c.FundingOutpoint)
++		f.rebroadcastFundingTx(c)
++		log.Infof("Pending channel funding rebroadcast finished: %v", c.FundingOutpoint)
++	}()
++}
++
+ // rebroadcastFundingTx publishes the funding tx on startup for each
+ // unconfirmed channel.
+ func (f *Manager) rebroadcastFundingTx(c *channeldb.OpenChannel) {
+diff --git a/funding/manager_test.go b/funding/manager_test.go
+index 0341e8a15..421ec7a71 100644
+--- a/funding/manager_test.go
++++ b/funding/manager_test.go
+@@ -703,7 +703,7 @@ func createTestFundingManager(t *testing.T, privKey *btcec.PrivateKey,
+ 	return testNode, nil
+ }
+ 
+-func recreateAliceFundingManager(t *testing.T, alice *testNode) {
++func recreateAliceFundingManager(t *testing.T, alice *testNode, options ...cfgOption) {
+ 	// Stop the old fundingManager before creating a new one.
+ 	close(alice.shutdownChannel)
+ 	if err := alice.fundingMgr.Stop(); err != nil {
+@@ -790,6 +790,9 @@ func recreateAliceFundingManager(t *testing.T, alice *testNode) {
+ 	alice.publTxChan = publishChan
+ 	alice.shutdownChannel = shutdownChan
+ 
++	for _, option := range options {
++		option(f.cfg)
++	}
+ 	if err = f.Start(); err != nil {
+ 		t.Fatalf("failed starting fundingManager: %v", err)
+ 	}
+@@ -6105,3 +6108,38 @@ func TestChannelReadyUnknownChannelID(t *testing.T) {
+ 		t, alice, bob, 500000, 0, 1, updateChan, true, nil,
+ 	)
+ }
++
++// A blocked backend rebroadcast must not hold the entire server below active.
++func TestFundingManagerRestartSlowRebroadcast(t *testing.T) {
++	alice, bob := setupFundingManagers(t)
++	t.Cleanup(func() { tearDownFundingManagers(t, alice, bob) })
++	updates := make(chan *lnrpc.OpenStatusUpdate)
++	_, _ = openChannel(t, alice, bob, 500000, 0, 1, updates, true, nil)
++	release := make(chan struct{})
++	publishing := make(chan struct{}, 1)
++	started := make(chan struct{})
++	go func() {
++		recreateAliceFundingManager(t, alice, func(cfg *Config) {
++			cfg.PublishTransaction = func(tx *wire.MsgTx, label string) error {
++				publishing <- struct{}{}
++				<-release
++				return nil
++			}
++		})
++		close(started)
++	}()
++	select {
++	case <-started:
++	case <-time.After(5 * time.Second):
++		close(release)
++		<-started
++		t.Fatal("startup waited for the funding transaction rebroadcast")
++	}
++	select {
++	case <-publishing:
++		close(release)
++	case <-time.After(5 * time.Second):
++		close(release)
++		t.Fatal("pending channel was not rebroadcast")
++	}
++}

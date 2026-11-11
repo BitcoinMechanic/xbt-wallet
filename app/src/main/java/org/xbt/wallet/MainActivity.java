@@ -452,7 +452,7 @@ public final class MainActivity extends Activity {
                         syncProgressBar("Block headers", progress.headers, progress.target, progress.percent(progress.headers));
                         syncProgressBar("Filter headers", progress.filters, progress.target, progress.percent(progress.filters));
                         text(progress.headers >= progress.target && progress.filters >= progress.target
-                            ? "Headers ready · finishing wallet startup…" : "Initial sync is running. Progress updates automatically.");
+                            ? progress.stage : "Initial sync is running. Progress updates automatically.");
                     } else {
                         ProgressBar spinner = new ProgressBar(this); page.addView(spinner);
                         text("Connecting to the chain peer and waiting for sync progress…");

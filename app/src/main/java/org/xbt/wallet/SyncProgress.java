@@ -5,12 +5,17 @@ import java.util.regex.*;
 /** Startup-only progress from LND's own log, before GetInfo becomes available. */
 final class SyncProgress {
     long target, headers, filters;
+    String stage = "Headers ready · finishing wallet startup…";
     private static final Pattern TARGET = Pattern.compile("Syncing to block height (\\d+) from peer");
     private static final Pattern HEADERS = Pattern.compile("Processed .*blocks.*\\(height (\\d+),");
     private static final Pattern FILTERS = Pattern.compile("Verified .*filter headers.*\\(height (\\d+),");
     private static final Pattern FILTER_WAIT = Pattern.compile("cfheaders sync from height (\\d+)");
     private static final Pattern CHECKPOINT = Pattern.compile("Verified downloaded block header against checkpoint at height (\\d+)/");
     void accept(String line) {
+        if (line.contains("Waiting for chain backend to finish sync")) stage = "Scanning wallet transactions…";
+        if (line.contains("Chain backend is fully synced!")) stage = "Starting Lightning services…";
+        if (line.contains("Funding manager starting")) stage = "Restoring pending channels…";
+        if (line.contains("HTLC Switch starting")) stage = "Starting Lightning payment routing…";
         target = matched(TARGET, line, target);
         headers = matched(HEADERS, line, headers);
         headers = matched(CHECKPOINT, line, headers);

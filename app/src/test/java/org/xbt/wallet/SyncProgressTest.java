@@ -11,6 +11,13 @@ public class SyncProgressTest {
         p.accept("Verified 2000 filter headers in the last 10s (height 20000, date)");
         assertEquals(20,p.percent(p.filters));
     }
+    @Test public void reportsStartupAfterChainSync() {
+        SyncProgress p = new SyncProgress();
+        p.accept("Chain backend is fully synced!");
+        assertEquals("Starting Lightning services…", p.stage);
+        p.accept("Funding manager starting");
+        assertEquals("Restoring pending channels…", p.stage);
+    }
     @Test public void recognizesCheckpointsAndCapsPercent() {
         SyncProgress p = new SyncProgress();
         assertEquals(0,p.percent(123));

@@ -92,7 +92,7 @@ public final class NodeService extends Service {
             syncLogOffset = input.getFilePointer();
         } catch (java.io.IOException ignored) { /* No progress log yet. */ }
         SyncProgress snapshot = new SyncProgress();
-        snapshot.target = sync.target; snapshot.headers = sync.headers; snapshot.filters = sync.filters;
+        snapshot.target = sync.target; snapshot.headers = sync.headers; snapshot.filters = sync.filters; snapshot.stage = sync.stage;
         return snapshot;
     }
     public void testTor() throws Exception { tor.start(this, message -> status = message); }
