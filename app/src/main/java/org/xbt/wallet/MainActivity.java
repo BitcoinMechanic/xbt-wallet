@@ -337,6 +337,9 @@ public final class MainActivity extends Activity {
         field.setHint(styled);
     }
     private EditText field(String hint, String value) {
+        return field(page, hint, value);
+    }
+    private EditText field(LinearLayout container, String hint, String value) {
         EditText e = new EditText(this); setFieldHint(e, hint); e.setText(value); e.setSingleLine(true); e.setTextSize(16);
         e.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}}, new int[]{0xff6c7c73,0xffeef5f0}));
         e.setHintTextColor(0xff8d9f94); e.setPadding(dp(14), dp(14), dp(14), dp(14)); e.setMinimumHeight(dp(54));
@@ -345,7 +348,7 @@ public final class MainActivity extends Activity {
         background.addState(new int[]{android.R.attr.state_focused}, surface(0xff19251e, 12, 0xffa8efd5));
         background.addState(new int[]{}, surface(0xff151e19, 12, 0xff35453b)); e.setBackground(background);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.topMargin = dp(4); params.bottomMargin = dp(10);
-        page.addView(e, params); return e;
+        container.addView(e, params); return e;
     }
     private EditText labelField(String value) {
         EditText label = field("Label Optional", value);
@@ -1091,20 +1094,38 @@ public final class MainActivity extends Activity {
         return label.isEmpty() ? "" : label + "\n";
     }
     private void labelChannel(String point, Runnable back) {
-        EditText input = new EditText(this);
-        input.setSingleLine(true); input.setHint("Channel label");
-        input.setText(prefs.getString("channel-label-" + point, ""));
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20), dp(20), dp(20), dp(20));
+        form.setFocusableInTouchMode(true);
+        TextView title = new TextView(this); title.setText("Label channel"); title.setTextSize(20);
+        title.setTextColor(0xffeef5f0); title.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        title.setPadding(0, 0, 0, dp(16)); form.addView(title);
+        TextView caption = new TextView(this); caption.setText("Label"); caption.setTextSize(15);
+        caption.setTextColor(0xffafbeb6); form.addView(caption);
+        EditText input = field(form, "Optional", prefs.getString("channel-label-" + point, ""));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
-        new WalletDialogBuilder().setTitle("Label channel").setMessage("Leave blank to remove the label.")
-            .setView(input).setNegativeButton("Cancel", null).setPositiveButton("Save", (d,w) -> {
-                String label = input.getText().toString().trim();
-                android.content.SharedPreferences.Editor edit = prefs.edit();
-                if (label.isEmpty()) edit.remove("channel-label-" + point);
-                else edit.putString("channel-label-" + point, label);
-                if (!edit.commit()) { error(new Exception("Could not save channel label.")); return; }
-                back.run();
-            }).show();
+        TextView help = new TextView(this); help.setText("Leave blank to remove the label."); help.setTextSize(13);
+        help.setTextColor(0xffafbeb6); help.setPadding(0, 0, 0, dp(16)); form.addView(help);
+        LinearLayout actions = new LinearLayout(this); actions.setBaselineAligned(false);
+        Button cancel = new Button(this); cancel.setText("Cancel"); styleButton(cancel, false);
+        Button save = new Button(this); save.setText("Save"); styleButton(save, true);
+        LinearLayout.LayoutParams cancelSize = new LinearLayout.LayoutParams(0, -2, 1); cancelSize.rightMargin = dp(5);
+        LinearLayout.LayoutParams saveSize = new LinearLayout.LayoutParams(0, -2, 1); saveSize.leftMargin = dp(5);
+        actions.addView(cancel, cancelSize); actions.addView(save, saveSize); form.addView(actions);
+        AlertDialog dialog = new WalletDialogBuilder().setView(form).create();
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        save.setOnClickListener(v -> {
+            String label = input.getText().toString().trim();
+            android.content.SharedPreferences.Editor edit = prefs.edit();
+            if (label.isEmpty()) edit.remove("channel-label-" + point);
+            else edit.putString("channel-label-" + point, label);
+            if (!edit.commit()) { error(new Exception("Could not save channel label.")); return; }
+            dialog.dismiss(); back.run();
+        });
+        dialog.show();
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff101517, 18, 0xff304037));
     }
+
     private void channelDetails(LightningOuterClass.Channel channel) {
         rememberChannelOrigin();
         page("Channel details");
