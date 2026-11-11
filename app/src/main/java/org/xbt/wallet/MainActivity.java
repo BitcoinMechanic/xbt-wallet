@@ -185,6 +185,7 @@ public final class MainActivity extends Activity {
     private NodeService node;
     private boolean bound, busy;
     private String screen = "";
+    private android.animation.ValueAnimator onboardingReveal;
     private int historyTab;
     private boolean channelDetailsFromHome;
     private final Set<String> expandedHomeChannels = new HashSet<>();
@@ -258,6 +259,7 @@ public final class MainActivity extends Activity {
     }
     private void page(String title, boolean sensitive, Runnable restore) {
         recordNavigation(title, restore);
+        if (onboardingReveal != null) { onboardingReveal.cancel(); onboardingReveal = null; }
         activeAmountEntry = null;
         for (android.animation.ValueAnimator animation : new ArrayList<>(channelExpansions.values())) animation.cancel();
         channelExpansions.clear(); homeChannelBalances.clear();
@@ -357,7 +359,25 @@ public final class MainActivity extends Activity {
             TextView heading = text(title); heading.setTextSize(28); heading.setTextColor(0xfff3f7f5);
             heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
             heading.setPadding(0, 0, 0, dp(20));
+            if (title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
+                || title.equals("Name your wallet") || title.equals("Wallet created")) revealOnboardingTitle(heading, title);
         }
+    }
+    private void revealOnboardingTitle(TextView heading, String title) {
+        if (!android.animation.ValueAnimator.areAnimatorsEnabled()) return;
+        // Keep the full text laid out throughout, so buttons and wrapped lines never jump.
+        java.util.function.IntConsumer reveal = count -> {
+            android.text.SpannableString text = new android.text.SpannableString(title);
+            if (count < title.length()) text.setSpan(new android.text.style.ForegroundColorSpan(android.graphics.Color.TRANSPARENT),
+                count, title.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            heading.setText(text);
+        };
+        reveal.accept(0);
+        onboardingReveal = android.animation.ValueAnimator.ofInt(0, title.length());
+        onboardingReveal.setDuration(500);
+        onboardingReveal.setInterpolator(new android.view.animation.LinearInterpolator());
+        onboardingReveal.addUpdateListener(frame -> reveal.accept((int) frame.getAnimatedValue()));
+        onboardingReveal.start();
     }
     private void updateHeaderRate() {
         if (headerBrand == null || headerRate == null) return;
@@ -537,10 +557,43 @@ public final class MainActivity extends Activity {
             finally { runOnUiThread(() -> busy = false); } });
     }
     private void modes() {
-        page("Your Lightning wallet");
+        page("Your Lightning Wallet");
         text("Easy Mode runs your XBT Lightning wallet on this phone. Hard Mode will let you connect to your own Lightning node.");
         button("Easy Mode", this::setup);
         Button hard = button("Hard Mode · coming later", () -> {}); hard.setEnabled(false);
+    }
+    private void createWalletIntro() {
+        page("Create your wallet", false, this::createWalletIntro);
+        text("Your keys stay on this device. Back up the seed to recover on-chain funds; channel recovery also requires channel backups.");
+        button("Create wallet", this::nameWallet);
+    }
+    private void nameWallet() {
+        page("Name your wallet", false, this::nameWallet);
+        text("Name");
+        EditText name = field("Optional", prefs.getString("wallet-name", "Neutrino"));
+        name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(32)});
+        name.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        name.setContentDescription("Wallet name, up to 32 characters");
+        button("Continue", () -> finishWalletCreation(name.getText().toString().trim()));
+        button("Not now", () -> finishWalletCreation(""));
+    }
+    private void finishWalletCreation(String name) {
+        work(() -> {
+            // Guard before changing metadata: revisiting onboarding must never alter an existing wallet.
+            if (node.walletState() != Stateservice.WalletState.NON_EXISTING)
+                throw new Exception("A wallet already exists on this device. Return Home to use it.");
+            android.content.SharedPreferences.Editor edit = prefs.edit();
+            if (name.isEmpty()) edit.remove("wallet-name"); else edit.putString("wallet-name", name);
+            if (!edit.commit()) throw new Exception("Could not save the wallet name. Please try again.");
+            node.createWallet();
+            runOnUiThread(() -> {
+                navigation.clear(); currentNavigation = null;
+                page("Wallet created");
+                if (!name.isEmpty()) text(name + " is ready.");
+                button("Back up seed", this::backup);
+                button("I'll do it later, I promise", this::home);
+            });
+        });
     }
     private void setup() {
         if (BuildConfig.MAINNET_TEST) {
@@ -581,8 +634,7 @@ public final class MainActivity extends Activity {
         work(() -> {
             Stateservice.WalletState state = node.walletState();
             if (state == Stateservice.WalletState.NON_EXISTING) {
-                runOnUiThread(() -> { page("Create your wallet"); text("Your keys stay on this device. Back up the seed to recover on-chain funds; channel recovery also requires channel backups.");
-                    button("Create wallet", () -> work(() -> { node.createWallet(); runOnUiThread(() -> { page("Wallet created"); button("Back up seed", this::backup); button("I'll do it later, I promise", this::home); }); })); }); return;
+                runOnUiThread(this::createWalletIntro); return;
             }
             if (state == Stateservice.WalletState.LOCKED) { node.unlock(); runOnUiThread(this::home); return; }
             if (state != Stateservice.WalletState.SERVER_ACTIVE) {
@@ -1683,7 +1735,10 @@ public final class MainActivity extends Activity {
     }
 
     private void advanced() {
-        page("Advanced"); text(node == null ? "Node disconnected" : node.status);
+        page("Advanced");
+        String walletName = prefs.getString("wallet-name", "");
+        if (!walletName.isEmpty()) text("Wallet name: " + walletName);
+        text(node == null ? "Node disconnected" : node.status);
         button("Node connection", this::nodeConnection);
         text("Fiat estimates use Neoxa XBT/USDC (BTCB2_USDC), treating 1 USDC as approximately 1 USD. Other currencies use Frankfurter reference rates. Stale or unavailable quotes display —. Regtest balances are test funds.");
         button("Closed-channel history", this::closedChannels); button("Back", this::home);
@@ -2827,5 +2882,5 @@ public final class MainActivity extends Activity {
             error(new Exception("This QR code is not a supported Lightning invoice or Bitcoin payment address. " + e.getMessage()));
         }
     }
-    @Override protected void onDestroy() { if (headerSlideAnimation != null) headerSlideAnimation.cancel(); handler.removeCallbacksAndMessages(null); if (bound) unbindService(connection); super.onDestroy(); }
+    @Override protected void onDestroy() { if (onboardingReveal != null) onboardingReveal.cancel(); if (headerSlideAnimation != null) headerSlideAnimation.cancel(); handler.removeCallbacksAndMessages(null); if (bound) unbindService(connection); super.onDestroy(); }
 }
