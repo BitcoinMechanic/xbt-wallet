@@ -381,7 +381,7 @@ public final class MainActivity extends Activity {
         page.addView(header, headerSize);
         if (!title.equals("Home")) {
             boolean onboarding = title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
-                || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Wallet is starting");
+                || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Wallet is starting") || title.equals("Wallets");
             TextView heading;
             if (onboarding) {
                 heading = new OnboardingTitleView(this); heading.setText(title);
@@ -456,6 +456,15 @@ public final class MainActivity extends Activity {
         states.addState(new int[]{-android.R.attr.state_enabled}, surface(0xff19201d, 14, 0xff252f2a));
         states.addState(new int[]{}, surface(accent ? 0xffa8efd5 : 0xff1d2723, 14, accent ? 0 : 0xff304037));
         button.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x336de8b1), states, null));
+    }
+    private void styleDestructiveButton(Button button) {
+        styleButton(button, false);
+        button.setTextColor(new android.content.res.ColorStateList(
+            new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}}, new int[]{0xff8e7777, 0xfffff5f5}));
+        android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
+        states.addState(new int[]{-android.R.attr.state_enabled}, surface(0xff342326, 14, 0));
+        states.addState(new int[]{}, surface(0xffa83240, 14, 0));
+        button.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33ffffff), states, null));
     }
     private void addQrFrame(ImageView qr, int height) {
         qr.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -574,6 +583,7 @@ public final class MainActivity extends Activity {
         LinearLayout actions = new LinearLayout(this); actions.setBaselineAligned(false);
         Button cancel = new Button(this); cancel.setText("Cancel"); styleButton(cancel, false);
         Button accept = new Button(this); accept.setText(action); styleButton(accept, true);
+        if (action.equals("Delete")) styleDestructiveButton(accept);
         LinearLayout.LayoutParams cancelSize = new LinearLayout.LayoutParams(0, -2, 1); cancelSize.rightMargin = dp(5);
         LinearLayout.LayoutParams acceptSize = new LinearLayout.LayoutParams(0, -2, 1); acceptSize.leftMargin = dp(5);
         actions.addView(cancel, cancelSize); actions.addView(accept, acceptSize); form.addView(actions);
@@ -602,7 +612,7 @@ public final class MainActivity extends Activity {
                 else switchWallet(id);
             });
         }
-        button("Delete selected wallet", this::deleteWallet);
+        styleDestructiveButton(button("Delete selected wallet", this::deleteWallet));
         text("To delete another wallet, select it first.");
         button("Create a new wallet", this::newWallet);
         button("Home", this::home);
@@ -669,8 +679,8 @@ public final class MainActivity extends Activity {
             checkWalletDeletion();
             final boolean remote = prefs.getString("mode", "").equals("remote");
             final String name = WalletProfiles.label(this, profile);
-            runOnUiThread(() -> confirmAction("Delete “" + name + "”?",
-                remote ? "This removes this wallet’s saved connection, credentials and labels from this phone. Your remote node, funds and channels will remain unchanged. You will need the connection credentials to add it again."
+            runOnUiThread(() -> confirmAction(remote ? "Are you sure?" : "Delete “" + name + "”?",
+                remote ? "Remove “" + name + "” from this phone?\n\nThis removes this wallet’s saved connection, credentials and labels from this phone. Your remote node, funds and channels will remain unchanged. You will need the connection credentials to add it again."
                     : "This permanently removes this wallet’s seed, node data, labels and payment history from this phone. This cannot be undone. Keep a seed backup if you might need to recover funds sent to its old addresses later.",
                 "Delete", () -> profileWork(() -> {
                     // Recheck after confirmation, then close every database before recording removal.
