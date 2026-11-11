@@ -19,6 +19,7 @@ import lnrpc.Walletunlocker;
 /** One embedded runtime per Android process, owned by a visible foreground service. */
 public final class NodeService extends Service {
     public final ExecutorService io = Executors.newSingleThreadExecutor();
+    public final long startupAt = android.os.SystemClock.elapsedRealtime();
     public volatile String status = "Starting your XBT node…";
     public volatile boolean rpcReady;
     public volatile boolean supportsOnionPeers;

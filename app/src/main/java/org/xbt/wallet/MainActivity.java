@@ -858,7 +858,20 @@ public final class MainActivity extends Activity {
         page(node == null || !node.rpcReady ? "Wallet is starting" : "Home");
         if (node == null) { text("Connecting to node…"); return; }
         text(node.status);
-        if (!node.rpcReady) { button("Wallets", this::wallets); button("Refresh", this::home); button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection); return; }
+        if (!node.rpcReady) {
+            button("Wallets", this::wallets); button("Refresh", this::home);
+            boolean remote = node.isRemote();
+            Button connection = button(remote ? "Remote Control connection" : "Node connection", remote ? this::remoteConnection : this::nodeConnection);
+            long remaining = 5000 - (android.os.SystemClock.elapsedRealtime() - node.startupAt);
+            if (!remote && remaining > 0) {
+                connection.setVisibility(View.GONE);
+                handler.postDelayed(() -> {
+                    if (connection.isAttachedToWindow() && node != null && !node.rpcReady)
+                        connection.setVisibility(View.VISIBLE);
+                }, remaining);
+            }
+            return;
+        }
         button("Refresh wallet", this::refresh);
         refresh();
     }
