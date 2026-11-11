@@ -2622,6 +2622,32 @@ public final class MainActivity extends Activity {
     }
     private void receiveLightning() {
         page("Receive Lightning");
+        TextView receiveLimit = text("Checking incoming liquidity…");
+        receiveLimit.setTextColor(0xffff7373);
+        final Long[] largestInbound = {null};
+        Runnable showReceiveLimit = () -> {
+            if (largestInbound[0] == null) return;
+            String value = displayUnit() == 2 && amountPrice() == null
+                ? String.format(Locale.US, "%,d sats", largestInbound[0]) : displayAmount(largestInbound[0]);
+            receiveLimit.setText("The largest amount you can receive in one Lightning payment is " + value);
+        };
+        if (node != null) node.io.execute(() -> {
+            try {
+                LightningOuterClass.ListChannelsResponse channels = LightningOuterClass.ListChannelsResponse.parseFrom(
+                    node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
+                long largest = ReceiveLiquidity.largest(channels);
+                runOnUiThread(() -> {
+                    if (!receiveLimit.isAttachedToWindow()) return;
+                    largestInbound[0] = largest;
+                    showReceiveLimit.run();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (receiveLimit.isAttachedToWindow())
+                        receiveLimit.setText("Could not determine incoming liquidity: " + e.getMessage());
+                });
+            }
+        });
         Switch swaps = new Switch(this);
         LinearLayout swapToggle = new LinearLayout(this); swapToggle.setGravity(Gravity.CENTER_VERTICAL);
         swapToggle.addView(swaps);
@@ -2632,6 +2658,7 @@ public final class MainActivity extends Activity {
         FrameLayout.LayoutParams toggleSize = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.CENTER_VERTICAL);
         pageHeader.addView(swapToggle, toggleSize);
         AmountEntry entry = new AmountEntry("Amount", "Optional");
+        entry.changed = showReceiveLimit;
         TextView amountTitle = entry.title;
         EditText amount = entry.input;
         text("Description");
