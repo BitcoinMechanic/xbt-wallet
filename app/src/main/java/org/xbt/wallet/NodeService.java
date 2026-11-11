@@ -21,6 +21,7 @@ public final class NodeService extends Service {
     public final ExecutorService io = Executors.newSingleThreadExecutor();
     public volatile String status = "Starting your XBT node…";
     public volatile boolean rpcReady;
+    public volatile boolean supportsOnionPeers;
     private boolean started;
     private final SyncProgress sync = new SyncProgress();
     private long syncLogOffset;
@@ -65,6 +66,7 @@ public final class NodeService extends Service {
                     + " --connectiontimeout=60s --neutrino.broadcasttimeout=60s";
                 if (useTor) args += " --tor.streamisolation";
                 if (!useTor) args += " --tor.skip-proxy-for-clearnet-targets";
+                supportsOnionPeers = true;
             }
             if (network.equals("mainnet")) {
                 String feeUrl = prefs.getString("feeUrl", "");

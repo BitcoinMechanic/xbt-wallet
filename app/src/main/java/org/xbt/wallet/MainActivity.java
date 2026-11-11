@@ -87,6 +87,7 @@ public final class MainActivity extends Activity {
     private boolean channelDetailsFromHome;
     private final Set<String> expandedHomeChannels = new HashSet<>();
     private final Map<String, android.animation.ValueAnimator> channelExpansions = new HashMap<>();
+    private final Set<String> reconnectingPeers = new HashSet<>();
     private final List<TextView> homeChannelBalances = new ArrayList<>();
     private final boolean[] homeActionsExpanded = new boolean[2];
     private final LinearLayout[] homeActionsViews = new LinearLayout[2];
@@ -468,6 +469,7 @@ public final class MainActivity extends Activity {
             LightningOuterClass.ListChannelsResponse active = LightningOuterClass.ListChannelsResponse.parseFrom(node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
             LightningOuterClass.ListPeersResponse peers = LightningOuterClass.ListPeersResponse.parseFrom(
                 node.rpc("listPeers", LightningOuterClass.ListPeersRequest.getDefaultInstance()));
+            rememberPeerAddresses(peers);
             Set<String> connectedPeers = new HashSet<>();
             for (LightningOuterClass.Peer peer : peers.getPeersList()) connectedPeers.add(peer.getPubKey());
             // One-way wallet history marker: closures must never reset onboarding.
@@ -499,7 +501,7 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.PendingChannelsResponse.WaitingCloseChannel c : pending.getWaitingCloseChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 if (hasPublic) text("Required on-chain reserve: " + displayAmount(balance.getReservedBalanceAnchorChan()));
                 homeScanButton();
-                homeChannelStatus(active, pending, connectedPeers);
+                homeChannelStatus(active, pending, connectedPeers, Integer.toUnsignedLong(info.getBlockHeight()));
                 page.setOnClickListener(v -> {
                     for (int i = 0; i < homeActionsExpanded.length; i++) {
                         if (homeActionsExpanded[i]) animateHomeActions(i, false);
@@ -517,7 +519,7 @@ public final class MainActivity extends Activity {
         text(String.format(Locale.getDefault(), "%,d / %,d", height, target));
     }
     private void homeChannelStatus(LightningOuterClass.ListChannelsResponse active,
-            LightningOuterClass.PendingChannelsResponse pending, Set<String> connectedPeers) {
+            LightningOuterClass.PendingChannelsResponse pending, Set<String> connectedPeers, long height) {
         if (active.getChannelsCount() == 0 && pending.getPendingOpenChannelsCount() == 0) return;
         LinearLayout channels = new LinearLayout(this); channels.setOrientation(LinearLayout.VERTICAL);
         boolean open = prefs.getBoolean("home-channels-expanded", true);
@@ -536,20 +538,37 @@ public final class MainActivity extends Activity {
         page.addView(channels, new LinearLayout.LayoutParams(-1, -2));
         int number = 1;
         for (LightningOuterClass.Channel channel : active.getChannelsList()) {
-            boolean connected = channel.getActive();
-            boolean connecting = !connected && connectedPeers.contains(channel.getRemotePubkey());
-            homeChannelRow(channels, channel.getChannelPoint(), number++, connected ? "Connected" : connecting ? "Connecting" : "Offline",
-                connected ? 0xff65d89a : connecting ? 0xffffb454 : 0xffed6b73, channel.getLocalBalance(), channel.getRemoteBalance(), () -> channelDetails(channel));
+            String peer = channel.getRemotePubkey();
+            boolean online = channel.getActive() || connectedPeers.contains(peer);
+            boolean retrying = reconnectingPeers.contains(peer);
+            String status = online ? "Connected" : retrying ? "Reconnecting" : "Disconnected";
+            int color = channel.getActive() ? 0xff65d89a : online || retrying ? 0xffffb454 : 0xffed6b73;
+            homeChannelRow(channels, channel.getChannelPoint(), number++, peer, status, color, "", !online,
+                channel.getLocalBalance(), channel.getRemoteBalance(), () -> channelDetails(channel));
         }
         for (LightningOuterClass.PendingChannelsResponse.PendingOpenChannel pendingChannel : pending.getPendingOpenChannelsList()) {
             LightningOuterClass.PendingChannelsResponse.PendingChannel channel = pendingChannel.getChannel();
-            boolean connecting = connectedPeers.contains(channel.getRemoteNodePub());
-            homeChannelRow(channels, channel.getChannelPoint(), number++, connecting ? "Connecting · awaiting channel confirmation" : "Offline · channel opening",
-                connecting ? 0xffffb454 : 0xffed6b73, channel.getLocalBalance(), channel.getRemoteBalance(),
+            String peer = channel.getRemoteNodePub();
+            boolean online = connectedPeers.contains(peer);
+            boolean retrying = reconnectingPeers.contains(peer);
+            String status = online ? "Connected" : retrying ? "Reconnecting" : "Disconnected";
+            long remaining = Integer.toUnsignedLong(pendingChannel.getConfirmationsUntilActive());
+            long confirmedAt = Integer.toUnsignedLong(pendingChannel.getConfirmationHeight());
+            String key = "channel-required-confs-" + channel.getChannelPoint();
+            long required = prefs.getLong(key, 0);
+            if (remaining > 0) {
+                long total = remaining + (confirmedAt == 0 ? 0 : Math.max(0, height - confirmedAt + 1));
+                if (total != required) prefs.edit().putLong(key, total).apply();
+                required = total;
+            }
+            String confirmations = ChannelStatus.confirmations(remaining, confirmedAt, height, required);
+            homeChannelRow(channels, channel.getChannelPoint(), number++, peer, status,
+                online || retrying ? 0xffffb454 : 0xffed6b73, confirmations, !online,
+                channel.getLocalBalance(), channel.getRemoteBalance(),
                 () -> pendingChannelDetails(channel, "Pending opening · " + pendingChannel.getConfirmationsUntilActive() + " confirmations until active"));
         }
     }
-    private void homeChannelRow(LinearLayout channels, String point, int number, String status, int color, long local, long remote, Runnable details) {
+    private void homeChannelRow(LinearLayout channels, String point, int number, String peer, String status, int color, String confirmations, boolean disconnected, long local, long remote, Runnable details) {
         String label = prefs.getString("channel-label-" + point, "");
         if (label.isEmpty()) label = "Channel " + number;
         LinearLayout row = new LinearLayout(this);
@@ -559,13 +578,20 @@ public final class MainActivity extends Activity {
         name.setText(label); name.setTextSize(16); name.setTextColor(0xffe5eee9);
         name.setMaxLines(1); name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+        if (!confirmations.isEmpty()) {
+            TextView confirmation = new TextView(this);
+            confirmation.setText(confirmations); confirmation.setTextSize(11);
+            confirmation.setTextColor(0xffafbeb6);
+            row.addView(confirmation, new LinearLayout.LayoutParams(-2, -2));
+        }
+        int[] lightColor = {color};
         View light = new View(this) {
             private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
             @Override protected void onDraw(android.graphics.Canvas canvas) {
                 super.onDraw(canvas);
                 // A shared clock keeps the pulse smooth across five-second home refreshes.
                 double phase = (android.os.SystemClock.uptimeMillis() % 4000L) * Math.PI * 2 / 4000;
-                paint.setColor(color);
+                paint.setColor(lightColor[0]);
                 paint.setAlpha((int) (255 * (.35 + .65 * (1 - Math.cos(phase)) / 2)));
                 canvas.drawCircle(getWidth() / 2f, getHeight() / 2f, Math.min(getWidth(), getHeight()) / 2f, paint);
                 if (isShown() && getWindowVisibility() == View.VISIBLE) postInvalidateDelayed(50);
@@ -594,17 +620,41 @@ public final class MainActivity extends Activity {
         card.addView(liquidity, barSize);
         LinearLayout expanded = new LinearLayout(this); expanded.setOrientation(LinearLayout.VERTICAL);
         expanded.setPadding(dp(4), dp(4), dp(12), dp(12));
-        TextView balances = new TextView(this);
-        balances.setText(channelBalances(local, remote)); balances.setTextSize(14); balances.setTextColor(0xffafbeb6);
-        balances.setTag(new long[]{local, remote}); homeChannelBalances.add(balances);
-        expanded.addView(balances);
-        TextView more = new TextView(this); more.setText("Channel details"); more.setTextSize(14); more.setTextColor(0xffa8efd5);
+        LinearLayout balanceRow = new LinearLayout(this);
+        for (int side = 0; side < 2; side++) {
+            long value = side == 0 ? local : remote;
+            TextView balances = new TextView(this);
+            balances.setText((side == 0 ? "Local: " : "Remote: ") + displayAmount(value));
+            balances.setTextSize(12.6f); balances.setTextColor(0xffafbeb6);
+            balances.setTag(new long[]{value, side}); homeChannelBalances.add(balances);
+            balanceRow.addView(balances, new LinearLayout.LayoutParams(0, -2, 1));
+        }
+        expanded.addView(balanceRow);
+        LinearLayout statusRow = new LinearLayout(this); statusRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView statusTitle = new TextView(this); statusTitle.setText("Status:"); statusTitle.setTextSize(12.6f); statusTitle.setTextColor(0xffafbeb6);
+        statusRow.addView(statusTitle, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout connection = new LinearLayout(this); connection.setGravity(Gravity.CENTER_VERTICAL);
+        TextView statusText = new TextView(this); statusText.setText(status); statusText.setTextSize(12.6f); statusText.setTextColor(0xffafbeb6);
+        connection.addView(statusText, new LinearLayout.LayoutParams(0, -2, 1));
+        if (disconnected) {
+            Button retry = new Button(this); styleButton(retry, false); retry.setText("↻"); retry.setTextSize(20);
+            retry.setPadding(0, 0, 0, 0); retry.setMinHeight(0); retry.setMinimumHeight(0);
+            retry.setBackground(surface(0xff1d2723, 24, 0xff304037));
+            retry.setContentDescription("Reconnect to channel peer"); retry.setEnabled(!reconnectingPeers.contains(peer));
+            retry.setOnClickListener(v -> connectPeerAddress(peer, null, () -> {
+                retry.setEnabled(false); statusText.setText("Reconnecting"); lightColor[0] = 0xffffb454;
+            }, this::home));
+            connection.addView(retry, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        }
+        statusRow.addView(connection, new LinearLayout.LayoutParams(0, -2, 1));
+        expanded.addView(statusRow);
+        TextView more = new TextView(this); more.setText("Channel details"); more.setTextSize(12.6f); more.setTextColor(0xffa8efd5);
         more.setPadding(0, dp(10), 0, dp(10)); more.setOnClickListener(v -> details.run());
         expanded.addView(more);
         card.addView(expanded, new LinearLayout.LayoutParams(-1, -2));
         expanded.setVisibility(expandedHomeChannels.contains(point) ? View.VISIBLE : View.GONE);
         expanded.setAlpha(expandedHomeChannels.contains(point) ? 1f : 0f);
-        card.setContentDescription(label + ". " + status + ". Local liquidity on the left, remote on the right. Tap to show or hide balances. Touch and hold to edit the channel label.");
+        card.setContentDescription(label + ". " + status + ". " + confirmations + ". Local liquidity on the left, remote on the right. Tap to show or hide balances. Touch and hold to edit the channel label.");
         card.setOnLongClickListener(v -> {
             labelChannel(point, this::home);
             return true;
@@ -742,7 +792,7 @@ public final class MainActivity extends Activity {
     private void updateBalanceAmounts() {
         for (TextView balances : homeChannelBalances) {
             long[] values = (long[]) balances.getTag();
-            balances.setText(channelBalances(values[0], values[1]));
+            balances.setText((values[1] == 0 ? "Local: " : "Remote: ") + displayAmount(values[0]));
         }
         String code = prefs.getString("fiat-currency", "USD");
         java.math.BigDecimal price = null;
@@ -1124,8 +1174,8 @@ public final class MainActivity extends Activity {
         PopupMenu popup = new PopupMenu(this, walletMenuAnchor, Gravity.END);
         walletPopup = popup;
         String[] labels = {"Payment history", "Fiat currency: " + prefs.getString("fiat-currency", "USD"),
-            "On chain funds", "Channels", "Swap controllers", "Back up seed", "Test recovery", "Advanced"};
-        Runnable[] actions = {this::paymentHistory, this::fiatCurrency, this::utxos, this::channelList, this::swapControllers,
+            "On chain funds", "Channels", "Peers", "Swap controllers", "Back up seed", "Test recovery", "Advanced"};
+        Runnable[] actions = {this::paymentHistory, this::fiatCurrency, this::utxos, this::channelList, this::peerList, this::swapControllers,
             this::backup, this::testRecovery, this::advanced};
         for (int i = 0; i < labels.length; i++) popup.getMenu().add(0, i, i, labels[i]);
         popup.setOnMenuItemClickListener(item -> {
@@ -1134,6 +1184,125 @@ public final class MainActivity extends Activity {
         });
         popup.setOnDismissListener(menu -> { if (walletPopup == popup) walletPopup = null; });
         popup.show();
+    }
+    private void rememberPeerAddresses(LightningOuterClass.ListPeersResponse peers) {
+        android.content.SharedPreferences.Editor edit = prefs.edit();
+        boolean changed = false;
+        for (LightningOuterClass.Peer peer : peers.getPeersList()) {
+            if (peer.getInbound()) continue;
+            try {
+                String address = Policy.endpoint(peer.getAddress());
+                String key = "peer-address-" + peer.getPubKey().toLowerCase(Locale.ROOT);
+                if (!address.equals(prefs.getString(key, ""))) { edit.putString(key, address); changed = true; }
+            } catch (IllegalArgumentException ignored) { /* An inbound peer may not advertise a dialable address. */ }
+        }
+        if (changed) edit.apply();
+    }
+    private void peerList() {
+        work(() -> {
+            LightningOuterClass.ListPeersResponse peers = LightningOuterClass.ListPeersResponse.parseFrom(
+                node.rpc("listPeers", LightningOuterClass.ListPeersRequest.getDefaultInstance()));
+            rememberPeerAddresses(peers);
+            runOnUiThread(() -> {
+                page("Peers");
+                text(peers.getPeersCount() + " connected " + (peers.getPeersCount() == 1 ? "peer" : "peers"));
+                for (LightningOuterClass.Peer peer : peers.getPeersList()) {
+                    String address = peer.getPubKey() + "@" + peer.getAddress();
+                    TextView entry = text(address);
+                    entry.setContentDescription("Connected peer " + address + ". Tap to copy.");
+                    entry.setOnClickListener(v -> {
+                        getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Lightning peer", address));
+                        Toast.makeText(this, "Peer address copied", Toast.LENGTH_SHORT).show();
+                    });
+                }
+                button("Add peer", () -> addPeer(""));
+                button("Refresh", this::peerList); button("Home", this::home);
+            });
+        });
+    }
+    private void addPeer(String initial) {
+        page("Add peer");
+        text("Peer address");
+        EditText address = field("pubkey@host:port", initial);
+        button("Scan QR", () -> scan(address));
+        button("Paste from Clipboard", () -> {
+            android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
+            ClipData clip = clipboard.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0 || clip.getItemAt(0).getText() == null) {
+                Toast.makeText(this, "No peer address in clipboard", Toast.LENGTH_SHORT).show(); return;
+            }
+            address.setText(clip.getItemAt(0).getText().toString().trim());
+        });
+        text("Use a public key followed by @host:port. Onion addresses require Tor enabled in Node connection and an app restart.");
+        button("Connect", () -> {
+            try {
+                String[] peer = Policy.peer(address.getText().toString());
+                connectPeerAddress(peer[0].toLowerCase(Locale.ROOT), peer[1],
+                    () -> Toast.makeText(this, "Connecting to peer…", Toast.LENGTH_SHORT).show(), this::peerList);
+            } catch (Exception e) { error(e); }
+        });
+        button("Node connection", this::nodeConnection);
+        button("Back to peers", this::peerList);
+    }
+    private void connectPeerAddress(String publicKey, String suppliedAddress, Runnable started, Runnable complete) {
+        if (busy || node == null) return;
+        String peer = publicKey.toLowerCase(Locale.ROOT);
+        busy = true; reconnectingPeers.add(peer); started.run();
+        node.io.execute(() -> {
+            Exception failure = null;
+            boolean missingAddress = false;
+            try {
+                LightningOuterClass.ListPeersResponse current = LightningOuterClass.ListPeersResponse.parseFrom(
+                    node.rpc("listPeers", LightningOuterClass.ListPeersRequest.getDefaultInstance()));
+                boolean connected = false;
+                for (LightningOuterClass.Peer existing : current.getPeersList()) connected |= existing.getPubKey().equalsIgnoreCase(peer);
+                if (!connected) {
+                    String address = suppliedAddress == null ? prefs.getString("peer-address-" + peer, "") : suppliedAddress;
+                    if (address.isEmpty()) {
+                        String lookupError = "No advertised addresses.";
+                        try {
+                            LightningOuterClass.NodeInfo info = LightningOuterClass.NodeInfo.parseFrom(node.rpc("getNodeInfo",
+                                LightningOuterClass.NodeInfoRequest.newBuilder().setPubKey(peer).build()));
+                            for (LightningOuterClass.NodeAddress candidate : info.getNode().getAddressesList()) {
+                                try { address = Policy.endpoint(candidate.getAddr()); break; }
+                                catch (IllegalArgumentException ignored) { }
+                            }
+                        } catch (Exception e) { lookupError = e.getMessage(); }
+                        if (address.isEmpty()) {
+                            missingAddress = true;
+                            throw new Exception("No saved address for this peer. Enter its host and port. Node lookup: " + lookupError);
+                        }
+                    }
+                    address = Policy.endpoint(address);
+                    if (address.toLowerCase(Locale.ROOT).contains(".onion:") && !node.supportsOnionPeers)
+                        throw new Exception("Tor is not enabled for this node. Enable onion Lightning peers in Node connection, save, and restart the app before connecting.");
+                    if (!prefs.edit().putString("peer-address-" + peer, address).commit())
+                        throw new Exception("Could not save the peer address. No connection was attempted.");
+                    node.rpc("connectPeer", LightningOuterClass.ConnectPeerRequest.newBuilder()
+                        .setAddr(LightningOuterClass.LightningAddress.newBuilder().setPubkey(peer).setHost(address))
+                        .setTimeout(30).build());
+                }
+            } catch (Exception e) {
+                failure = e;
+                // A timeout can race successful connection establishment. Reconcile without retrying.
+                try {
+                    LightningOuterClass.ListPeersResponse current = LightningOuterClass.ListPeersResponse.parseFrom(
+                        node.rpc("listPeers", LightningOuterClass.ListPeersRequest.getDefaultInstance()));
+                    for (LightningOuterClass.Peer existing : current.getPeersList())
+                        if (existing.getPubKey().equalsIgnoreCase(peer)) { failure = null; missingAddress = false; }
+                } catch (Exception check) {
+                    failure = new Exception(e.getMessage() + " Connection status check also failed: " + check.getMessage());
+                }
+            }
+            final Exception result = failure;
+            final boolean needsAddress = missingAddress;
+            runOnUiThread(() -> {
+                busy = false; reconnectingPeers.remove(peer);
+                if (isDestroyed()) return;
+                if (needsAddress) addPeer(peer + "@"); else complete.run();
+                if (result != null) error(new Exception("Peer connection failed: " + result.getMessage()));
+            });
+        });
     }
     private org.json.JSONArray savedControllers() throws Exception {
         return new org.json.JSONArray(prefs.getString("swap-controllers", "[]"));
@@ -1671,6 +1840,8 @@ public final class MainActivity extends Activity {
                                 LightningOuterClass.ListPeersResponse peers = LightningOuterClass.ListPeersResponse.parseFrom(node.rpc("listPeers", LightningOuterClass.ListPeersRequest.getDefaultInstance()));
                                 boolean connected = false;
                                 for (LightningOuterClass.Peer existing : peers.getPeersList()) if (existing.getPubKey().equalsIgnoreCase(p[0])) connected = true;
+                                if (!prefs.edit().putString("peer-address-" + p[0].toLowerCase(Locale.ROOT), p[1]).commit())
+                                    throw new Exception("Could not save peer address.");
                                 if (!connected) node.rpc("connectPeer", LightningOuterClass.ConnectPeerRequest.newBuilder().setAddr(LightningOuterClass.LightningAddress.newBuilder().setPubkey(p[0]).setHost(p[1])).build());
                                 if (!prefs.edit().putBoolean("opening", true).commit()) throw new Exception("Could not record submission");
                                 node.rpc("openChannelSync", req.build()); prefs.edit().putBoolean("hasEverHadChannel", true).putBoolean("opening", false).commit(); runOnUiThread(this::home);
