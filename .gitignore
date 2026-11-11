@@ -17,3 +17,8 @@ app/libs/*-sources.jar
 wallet.db
 channel.db
 *.log
+ios/Frameworks/
+ios/DerivedData/
+*.xcarchive
+*.ipa
+**/xcuserdata/
