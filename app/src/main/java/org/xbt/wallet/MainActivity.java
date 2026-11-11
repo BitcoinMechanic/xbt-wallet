@@ -116,6 +116,61 @@ public final class MainActivity extends Activity {
             list.setPadding(dp(8), 0, dp(8), dp(8));
         }
     }
+    private static final class NavigationEntry {
+        final String title;
+        final Runnable restore;
+        NavigationEntry(String title, Runnable restore) { this.title = title; this.restore = restore; }
+    }
+    private final Deque<NavigationEntry> navigation = new ArrayDeque<>();
+    private NavigationEntry currentNavigation;
+
+    private Runnable pageRoute(String title) {
+        switch (title) {
+            case "Home": return this::home;
+            case "On chain funds": return this::utxos;
+            case "Channels": return this::channelList;
+            case "Peers": return this::peerList;
+            case "Add peer": return () -> addPeer("");
+            case "Swap controllers": return this::swapControllers;
+            case "Search controllers": return this::controllerSearch;
+            case "Advanced": return this::advanced;
+            case "Node connection": return this::nodeConnection;
+            case "Closed-channel history": return this::closedChannels;
+            case "Payment history": return this::paymentHistory;
+            case "Before you view your seed": return this::backup;
+            case "Test recovery": return this::testRecovery;
+            case "Receive XBT": return this::deposit;
+            case "Open Channel": return this::coins;
+            case "Send on chain": return this::sendOnChain;
+            case "Receive Lightning": return this::receiveLightning;
+            case "Swap requests": return this::swapReceipts;
+            case "Pay Lightning": return this::payment;
+            default: return null; // Never replay submissions or expose a seed by navigating back.
+        }
+    }
+    private void recordNavigation(String title, Runnable restore) {
+        if (title.equals("Home")) navigation.clear();
+        else if (currentNavigation != null && !currentNavigation.title.equals(title)) {
+            boolean ancestor = false;
+            for (NavigationEntry entry : navigation) ancestor |= entry.title.equals(title);
+            if (ancestor) {
+                while (!navigation.isEmpty() && !navigation.pop().title.equals(title)) { }
+            } else if (currentNavigation.restore != null) navigation.push(currentNavigation);
+        }
+        currentNavigation = new NavigationEntry(title, restore);
+    }
+    @Override public void onBackPressed() {
+        if (walletPopup != null) { walletPopup.dismiss(); return; }
+        if (screen.equals("Home")) { super.onBackPressed(); return; }
+        if (busy) {
+            Toast.makeText(this, "Please wait for the current operation to finish", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (navigation.isEmpty()) { home(); return; }
+        NavigationEntry previous = navigation.pop();
+        currentNavigation = previous;
+        previous.restore.run();
+    }
     private LinearLayout page;
     private FrameLayout pageHeader;
     private ImageView headerBrand;
@@ -189,6 +244,10 @@ public final class MainActivity extends Activity {
         page(title, false);
     }
     private void page(String title, boolean sensitive) {
+        page(title, sensitive, pageRoute(title));
+    }
+    private void page(String title, boolean sensitive, Runnable restore) {
+        recordNavigation(title, restore);
         activeAmountEntry = null;
         for (android.animation.ValueAnimator animation : new ArrayList<>(channelExpansions.values())) animation.cancel();
         channelExpansions.clear(); homeChannelBalances.clear();
@@ -371,7 +430,9 @@ public final class MainActivity extends Activity {
         boolean accent = label.startsWith("Review") || label.startsWith("Create") || label.equals("Send") || label.equals("Save") || label.equals("Check backup");
         styleButton(b, accent);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.topMargin = dp(5); params.bottomMargin = dp(5);
-        page.addView(b, params); b.setOnClickListener(v -> { if (!busy) action.run(); }); return b;
+        page.addView(b, params); b.setOnClickListener(v -> { if (!busy) {
+            if (label.equals("Back") || label.startsWith("Back to ")) onBackPressed(); else action.run();
+        } }); return b;
     }
     private void setFieldHint(EditText field, String hint) {
         android.text.SpannableString styled = new android.text.SpannableString(hint);
@@ -1196,7 +1257,7 @@ public final class MainActivity extends Activity {
     }
     private void pendingChannelDetails(LightningOuterClass.PendingChannelsResponse.PendingChannel channel, String status) {
         rememberChannelOrigin();
-        page("Pending channel details");
+        page("Pending channel details", false, () -> pendingChannelDetails(channel, status));
         String label = prefs.getString("channel-label-" + channel.getChannelPoint(), "");
         if (!label.isEmpty()) text(label);
         text(status);
@@ -1246,7 +1307,7 @@ public final class MainActivity extends Activity {
 
     private void channelDetails(LightningOuterClass.Channel channel) {
         rememberChannelOrigin();
-        page("Channel details");
+        page("Channel details", false, () -> channelDetails(channel));
         String label = prefs.getString("channel-label-" + channel.getChannelPoint(), "");
         if (!label.isEmpty()) text(label);
         button(label.isEmpty() ? "Add label" : "Edit label", () -> labelChannel(channel.getChannelPoint(), () -> channelDetails(channel)));
@@ -1469,7 +1530,7 @@ public final class MainActivity extends Activity {
         button("Back", this::home);
     }
     private void controllerAdd(String address, String expectedIdentity) {
-        page("Add controller");
+        page("Add controller", false, () -> controllerAdd(address, expectedIdentity));
         text("Controller address"); EditText url = field("https://… or http://….onion", address);
         url.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         button("Scan QR", () -> scan(url));
@@ -1516,7 +1577,7 @@ public final class MainActivity extends Activity {
         button("Back", this::swapControllers);
     }
     private void controllerDetails(org.json.JSONObject item) {
-        page("Controller details");
+        page("Controller details", false, () -> controllerDetails(item));
         String address = item.optString("address"), identity = item.optString("provider");
         text(item.optString("label", item.optString("name"))); text(address);
         text("XBT → BTC · " + item.optString("environment")); text("Saved identity\n" + identity);
@@ -1541,7 +1602,7 @@ public final class MainActivity extends Activity {
         button("Back", this::swapControllers);
     }
     private void controllerReceiveSetup(org.json.JSONObject item) {
-        page("Swap receive access", true);
+        page("Swap receive access", true, () -> controllerReceiveSetup(item));
         String identity = item.optString("provider");
         text("Wallet Receive API address");
         EditText address = field("https://… or http://….onion", prefs.getString("receive-api-" + identity, ""));
@@ -1581,7 +1642,7 @@ public final class MainActivity extends Activity {
         button("Back", this::swapControllers);
     }
     private void controllerResults(List<SwapControllers.Provider> results) {
-        page("Search results");
+        page("Search results", false, () -> controllerResults(results));
         EditText query = field("Search name or address", "");
         LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL); page.addView(rows);
         Runnable render = () -> {
