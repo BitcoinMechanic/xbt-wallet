@@ -20,6 +20,7 @@ public final class MainActivity extends Activity {
     @Override protected void attachBaseContext(Context base) {
         android.content.res.Configuration config = new android.content.res.Configuration(base.getResources().getConfiguration());
         config.densityDpi = Math.round(config.densityDpi * UI_SCALE);
+        config.fontScale *= 1.15f;
         super.attachBaseContext(base.createConfigurationContext(config));
     }
     private void clearFieldFocusOutside(Window window, android.view.MotionEvent event) {
@@ -189,7 +190,7 @@ public final class MainActivity extends Activity {
                 saved = canvas.save();
                 canvas.clipRect(x + .26f * w, y, x + .74f * w, y + h);
                 canvas.clipOutPath(wings);
-                canvas.translate(-headerSlide * dp(110), 0);
+                canvas.translate(-headerSlide * dp(126.5f), 0);
                 // Also clip the source after translating, so the opposite flourish
                 // cannot slide into the center along with the lettering.
                 canvas.clipRect(x + .26f * w, y, x + .74f * w, y + h);
@@ -200,7 +201,7 @@ public final class MainActivity extends Activity {
         brand.setImageResource(org.xbt.wallet.R.drawable.xbt_logo);
         brand.setContentDescription("XBT. Tap to show the fiat exchange rate.");
         brand.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        header.addView(brand, new FrameLayout.LayoutParams(dp(220), dp(79.2f), Gravity.CENTER));
+        header.addView(brand, new FrameLayout.LayoutParams(dp(253), dp(91.08f), Gravity.CENTER));
         headerRate = new TextView(this);
         headerRate.setGravity(Gravity.CENTER); headerRate.setTextSize(20);
         headerRate.setTextColor(0xffe8d2a7);
@@ -209,7 +210,7 @@ public final class MainActivity extends Activity {
         FrameLayout rateViewport = new FrameLayout(this);
         rateViewport.setClipChildren(true);
         rateViewport.addView(headerRate, new FrameLayout.LayoutParams(-1, -1));
-        header.addView(rateViewport, new FrameLayout.LayoutParams(dp(77), dp(79.2f), Gravity.CENTER));
+        header.addView(rateViewport, new FrameLayout.LayoutParams(dp(88.55f), dp(91.08f), Gravity.CENTER));
         View.OnClickListener toggleRate = v -> {
             prefs.edit().putBoolean("header-fiat-rate", !prefs.getBoolean("header-fiat-rate", false)).apply();
             if (headerSlideAnimation != null) headerSlideAnimation.cancel();
@@ -263,7 +264,7 @@ public final class MainActivity extends Activity {
     }
     private void positionHeaderRate() {
         headerBrand.invalidate();
-        headerRate.setTranslationX((1f - headerSlide) * dp(110));
+        headerRate.setTranslationX((1f - headerSlide) * dp(126.5f));
         headerRate.setVisibility(headerSlide == 0 ? View.INVISIBLE : View.VISIBLE);
         headerBrand.setContentDescription(headerSlide >= .5f
             ? "Tap to show the XBT logo." : "XBT. Tap to show the fiat exchange rate.");
@@ -2229,7 +2230,7 @@ public final class MainActivity extends Activity {
     }
     private void launchScanner(String prompt) {
         new com.google.zxing.integration.android.IntentIntegrator(this).setDesiredBarcodeFormats(com.google.zxing.integration.android.IntentIntegrator.QR_CODE)
-            .setPrompt(prompt).setBeepEnabled(false).initiateScan();
+            .setCaptureActivity(WalletScanActivity.class).setPrompt(prompt).setBeepEnabled(false).initiateScan();
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
