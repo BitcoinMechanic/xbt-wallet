@@ -813,13 +813,11 @@ public final class MainActivity extends Activity {
         text("Easy Mode runs your XBT Lightning wallet on this phone. Remote Control connects to your own Lightning node.");
         button("Easy Mode", this::setup);
         button("Remote Control", this::remoteControlIntro);
-        if (WalletProfiles.ids(this).size() > 1) button("Wallets", this::wallets);
     }
     private void createWalletIntro() {
         page("Create your wallet", false, this::createWalletIntro);
         text("Your keys stay on this device. Back up the seed to recover on-chain funds; channel recovery also requires channel backups.");
         button("Create wallet", this::nameWallet);
-        if (WalletProfiles.ids(this).size() > 1) button("Wallets", this::wallets);
     }
     private void nameWallet() {
         page("Name your wallet", false, this::nameWallet);
@@ -830,7 +828,6 @@ public final class MainActivity extends Activity {
         name.setContentDescription("Wallet name, up to 32 characters");
         button("Continue", () -> finishWalletCreation(name.getText().toString().trim()));
         button("Not now", () -> finishWalletCreation(""));
-        if (WalletProfiles.ids(this).size() > 1) button("Wallets", this::wallets);
     }
     private void finishWalletCreation(String name) {
         work(() -> {
