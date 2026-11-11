@@ -600,6 +600,17 @@ public final class MainActivity extends Activity {
         heading.setOnClickListener(v -> {
             boolean expand = !prefs.getBoolean("home-channels-expanded", true);
             prefs.edit().putBoolean("home-channels-expanded", expand).apply();
+            expandedHomeChannels.clear();
+            if (expand) {
+                for (String key : new ArrayList<>(channelExpansions.keySet())) {
+                    if (!key.equals("channels-section")) channelExpansions.remove(key).cancel();
+                }
+                for (int i = 0; i < channels.getChildCount(); i++) {
+                    View details = (View) channels.getChildAt(i).getTag();
+                    details.setVisibility(View.GONE); details.setAlpha(0f);
+                    details.getLayoutParams().height = LinearLayout.LayoutParams.WRAP_CONTENT;
+                }
+            }
             heading.setText(expand ? "Channels ▾" : "Channels ▸");
             heading.setContentDescription("Channels. " + (expand ? "Expanded" : "Collapsed") + ". Tap to toggle.");
             animateChannelsSection(channels, expand);
@@ -733,6 +744,7 @@ public final class MainActivity extends Activity {
         more.setPadding(0, dp(10), 0, dp(10)); more.setOnClickListener(v -> details.run());
         expanded.addView(more);
         card.addView(expanded, new LinearLayout.LayoutParams(-1, -2));
+        card.setTag(expanded);
         expanded.setVisibility(expandedHomeChannels.contains(point) ? View.VISIBLE : View.GONE);
         expanded.setAlpha(expandedHomeChannels.contains(point) ? 1f : 0f);
         card.setContentDescription(label + ". " + status + ". " + confirmations + ". Local liquidity on the left, remote on the right. Tap to show or hide balances. Touch and hold to edit the channel label.");
