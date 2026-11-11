@@ -244,6 +244,10 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         profile = WalletProfiles.active(this);
         prefs = WalletProfiles.settings(this, profile);
+        if (WalletProfiles.hasPendingDeletion(this)) { resumeWalletRemoval(); return; }
+        openSelectedWallet();
+    }
+    private void openSelectedWallet() {
         if (BuildConfig.MAINNET_TEST && !prefs.contains("network")) {
             prefs.edit().putString("network", "mainnet").commit();
         }
@@ -589,6 +593,8 @@ public final class MainActivity extends Activity {
                 else switchWallet(id);
             });
         }
+        button("Delete selected wallet", this::deleteWallet);
+        text("To delete another wallet, select it first.");
         button("Create a new wallet", () -> {
             try { switchWallet(WalletProfiles.create(this)); }
             catch (Exception e) { error(e); }
@@ -602,17 +608,70 @@ public final class MainActivity extends Activity {
             try {
                 if (node != null) node.stopForSwitch();
                 WalletProfiles.activate(this, id);
-                runOnUiThread(() -> {
-                    startActivity(new Intent(this, WalletRestartActivity.class)
-                        .putExtra("old_pid", android.os.Process.myPid()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                    android.os.Process.killProcess(android.os.Process.myPid());
-                });
+                runOnUiThread(this::restartSelectedWallet);
             } catch (Exception e) {
                 runOnUiThread(() -> { busy = false; handler.postDelayed(poll, 5000); error(e); });
             }
         };
         Toast.makeText(this, "Switching wallets…", Toast.LENGTH_LONG).show();
         if (node != null) node.io.execute(switchTask); else new Thread(switchTask, "wallet-switch").start();
+    }
+    private void restartSelectedWallet() {
+        startActivity(new Intent(this, WalletRestartActivity.class)
+            .putExtra("old_pid", android.os.Process.myPid()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        android.os.Process.killProcess(android.os.Process.myPid());
+    }
+    private void profileWork(Job job) {
+        if (busy) return;
+        busy = true;
+        Runnable action = () -> {
+            try { job.run(); }
+            catch (Exception e) { runOnUiThread(() -> error(e)); }
+            finally { runOnUiThread(() -> busy = false); }
+        };
+        if (node != null) node.io.execute(action); else new Thread(action, "wallet-profile").start();
+    }
+    private void checkWalletDeletion() throws Exception {
+        if (!WalletProfiles.active(this).equals(profile)) throw new Exception("The selected wallet changed. Open Wallets and try again.");
+        if (node != null) { node.checkDeletion(); return; }
+        String mode = prefs.getString("mode", "");
+        if (mode.equals("remote")) return;
+        if (mode.isEmpty() && new Vault(this, profile).get("seed") == null && new Vault(this, profile).get("password") == null) return;
+        throw new Exception("Open this wallet and wait for it to synchronize before deleting it, so its funds and channels can be checked.");
+    }
+    private void deleteWallet() {
+        profileWork(() -> {
+            checkWalletDeletion();
+            final boolean remote = prefs.getString("mode", "").equals("remote");
+            final String name = WalletProfiles.label(this, profile);
+            runOnUiThread(() -> confirmAction("Delete “" + name + "”?",
+                remote ? "This removes this wallet’s saved connection, credentials and labels from this phone. Your remote node, funds and channels will remain unchanged. You will need the connection credentials to add it again."
+                    : "This permanently removes this wallet’s seed, node data, labels and payment history from this phone. This cannot be undone. Keep a seed backup if you might need to recover funds sent to its old addresses later.",
+                "Delete", () -> profileWork(() -> {
+                    // Recheck after confirmation, then close every database before recording removal.
+                    checkWalletDeletion();
+                    if (node != null) node.stopForSwitch();
+                    handler.removeCallbacks(poll);
+                    WalletProfiles.beginDeletion(this, profile);
+                    runOnUiThread(this::restartSelectedWallet);
+                })));
+        });
+    }
+    private void resumeWalletRemoval() {
+        busy = true; page("Removing wallet", true, null);
+        text("Removing this wallet’s local data…");
+        new Thread(() -> {
+            try {
+                WalletProfiles.finishDeletions(this);
+                // Fresh process discards any cached references to removed preferences or keys.
+                runOnUiThread(this::restartSelectedWallet);
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    busy = false; page("Wallet removal interrupted", true, null);
+                    text(e.getMessage()); button("Retry removal", this::resumeWalletRemoval);
+                });
+            }
+        }, "wallet-removal").start();
     }
     private java.util.function.Consumer<String> connectionScan;
     private final TorTransport setupTor = NodeService.processTor;

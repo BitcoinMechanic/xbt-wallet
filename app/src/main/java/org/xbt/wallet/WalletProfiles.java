@@ -24,7 +24,7 @@ final class WalletProfiles {
     }
     static List<String> ids(Context context) {
         Set<String> all = new TreeSet<>(registry(context).getStringSet("ids", Collections.emptySet()));
-        all.add(LEGACY);
+        if (!registry(context).contains("ids")) all.add(LEGACY);
         return new ArrayList<>(all);
     }
     static String create(Context context) throws Exception {
@@ -41,6 +41,53 @@ final class WalletProfiles {
     static void activate(Context context, String id) throws Exception {
         if (!ids(context).contains(valid(id))) throw new Exception("Wallet profile not found.");
         if (!registry(context).edit().putString("active", id).commit()) throw new Exception("Could not switch wallet profile.");
+    }
+    /** Commit removal before erasing files. A crash resumes cleanup before any node starts. */
+    static void beginDeletion(Context context, String id) throws Exception {
+        valid(id);
+        if (!active(context).equals(id) || !ids(context).contains(id)) throw new Exception("Select this wallet before deleting it.");
+        Set<String> remaining = new HashSet<>(ids(context)); remaining.remove(id);
+        String next;
+        if (remaining.isEmpty()) {
+            next = create(context); remaining.add(next);
+        } else next = new TreeSet<>(remaining).first();
+        Set<String> pending = new HashSet<>(registry(context).getStringSet("pending-deletions", Collections.emptySet()));
+        pending.add(id);
+        if (!registry(context).edit().putStringSet("ids", remaining).putString("active", next)
+                .putStringSet("pending-deletions", pending).commit()) throw new Exception("Could not record wallet deletion. No wallet files were removed.");
+    }
+    static boolean hasPendingDeletion(Context context) {
+        return !registry(context).getStringSet("pending-deletions", Collections.emptySet()).isEmpty();
+    }
+    static void finishDeletions(Context context) throws Exception {
+        Set<String> pending = new HashSet<>(registry(context).getStringSet("pending-deletions", Collections.emptySet()));
+        for (String id : new HashSet<>(pending)) {
+            valid(id);
+            if (active(context).equals(id) || ids(context).contains(id)) throw new Exception("Wallet deletion record conflicts with an active wallet. No files were removed.");
+            if (LEGACY.equals(id)) {
+                erase(directory(context, id, "mainnet")); erase(directory(context, id, "regtest"));
+            } else erase(new File(context.getFilesDir(), "profiles/" + id));
+            // Clear cached preferences as well as disk copies before removing the key.
+            if (!context.getSharedPreferences(vaultName(id), 0).edit().clear().commit()) throw new Exception("Could not remove wallet secrets. Cleanup will resume on restart.");
+            context.deleteSharedPreferences(vaultName(id));
+            java.security.KeyStore keys = java.security.KeyStore.getInstance("AndroidKeyStore"); keys.load(null);
+            if (keys.containsAlias(keyAlias(id))) keys.deleteEntry(keyAlias(id));
+            if (!settings(context, id).edit().clear().commit()) throw new Exception("Could not remove wallet settings. Cleanup will resume on restart.");
+            context.deleteSharedPreferences(settingsName(id));
+            pending.remove(id);
+            if (!registry(context).edit().putStringSet("pending-deletions", new HashSet<>(pending)).commit()) throw new Exception("Could not finish wallet removal. Cleanup will resume on restart.");
+        }
+    }
+    private static void erase(File path) throws java.io.IOException {
+        // Do not follow a symlink out of this profile's directory.
+        if (java.nio.file.Files.isSymbolicLink(path.toPath())) { java.nio.file.Files.delete(path.toPath()); return; }
+        if (!path.exists()) return;
+        if (path.isDirectory()) {
+            File[] children = path.listFiles();
+            if (children == null) throw new java.io.IOException("Could not read wallet files for removal.");
+            for (File child : children) erase(child);
+        }
+        if (!path.delete()) throw new java.io.IOException("Could not remove wallet files. Cleanup will resume on restart.");
     }
     static String label(Context context, String id) {
         String name = settings(context, id).getString("wallet-name", "");

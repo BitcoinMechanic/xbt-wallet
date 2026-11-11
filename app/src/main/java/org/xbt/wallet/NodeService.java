@@ -169,6 +169,24 @@ public final class NodeService extends Service {
         rpc("initWallet", Walletunlocker.InitWalletRequest.newBuilder().setWalletPassword(ByteString.copyFromUtf8(password))
                 .addAllCipherSeedMnemonic(Arrays.asList(words.split(" "))).build());
     }
+    public void checkDeletion() throws Exception {
+        if (activeStreams.get() > 0) throw new Exception("Wait for the current operation to finish before deleting this wallet.");
+        if (isRemote()) return; // Removing local credentials never touches the remote node.
+        if (!rpcReady) throw new Exception("Wait for this wallet to start so its funds and channels can be checked.");
+        Stateservice.WalletState state = walletState();
+        if (state == Stateservice.WalletState.NON_EXISTING && new Vault(this, profile).get("seed") == null) return;
+        if (state != Stateservice.WalletState.SERVER_ACTIVE) throw new Exception("Unlock and synchronize this wallet before deleting it.");
+        lnrpc.LightningOuterClass.GetInfoResponse info = lnrpc.LightningOuterClass.GetInfoResponse.parseFrom(rpc("getInfo", lnrpc.LightningOuterClass.GetInfoRequest.getDefaultInstance()));
+        if (!info.getSyncedToChain()) throw new Exception("Wait for chain synchronization before deleting this wallet, so its balance can be checked.");
+        lnrpc.LightningOuterClass.WalletBalanceResponse funds = lnrpc.LightningOuterClass.WalletBalanceResponse.parseFrom(rpc("walletBalance", lnrpc.LightningOuterClass.WalletBalanceRequest.getDefaultInstance()));
+        lnrpc.LightningOuterClass.ListChannelsResponse channels = lnrpc.LightningOuterClass.ListChannelsResponse.parseFrom(rpc("listChannels", lnrpc.LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
+        lnrpc.LightningOuterClass.PendingChannelsResponse pending = lnrpc.LightningOuterClass.PendingChannelsResponse.parseFrom(rpc("pendingChannels", lnrpc.LightningOuterClass.PendingChannelsRequest.getDefaultInstance()));
+        WalletDeletion.check(funds, channels, pending);
+        lnrpc.LightningOuterClass.ListPaymentsResponse payments = lnrpc.LightningOuterClass.ListPaymentsResponse.parseFrom(rpc("listPayments", lnrpc.LightningOuterClass.ListPaymentsRequest.newBuilder().setIncludeIncomplete(true).build()));
+        for (lnrpc.LightningOuterClass.Payment payment : payments.getPaymentsList())
+            if (payment.getStatus() == lnrpc.LightningOuterClass.Payment.PaymentStatus.IN_FLIGHT || payment.getStatus() == lnrpc.LightningOuterClass.Payment.PaymentStatus.INITIATED)
+                throw new Exception("A Lightning payment is still in progress. Wait for it to finish before deleting this wallet.");
+    }
     public void stopForSwitch() throws Exception {
         if (activeStreams.get() > 0) throw new Exception("An operation is still awaiting a node response. Wait for it to finish before switching wallets.");
         if (isRemote()) { rpcReady = false; stopped = true; tor.close(this); return; }
