@@ -196,6 +196,10 @@ public final class MainActivity extends Activity {
     private long startingRevealAt;
     private int historyTab;
     private boolean channelDetailsFromHome;
+    private String viewingSpliceChannel;
+    private String viewingSpliceTxid;
+    private TextView spliceDetailsText;
+    private TextView spliceRefreshError;
     private final Set<String> expandedHomeChannels = new HashSet<>();
     private final Map<String, android.animation.ValueAnimator> channelExpansions = new HashMap<>();
     private final Set<String> reconnectingPeers = new HashSet<>();
@@ -219,6 +223,7 @@ public final class MainActivity extends Activity {
     private final Runnable poll = new Runnable() {
         public void run() {
             if (node != null && !busy && (screen.equals("Home") || screen.equals("Starting..."))) home();
+            if (node != null && !busy && screen.equals("Channel details") && viewingSpliceChannel != null) refreshSpliceDetails();
             if (node != null && !busy && screen.equals("Receive XBT")) checkDeposit();
             if (node != null && !busy && screen.equals("Lightning invoice")) checkLightningReceipt();
             if (node != null && !busy && screen.equals("Swap invoice") && viewingSwapHash != null) {
@@ -285,6 +290,7 @@ public final class MainActivity extends Activity {
         else getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         if (walletPopup != null) walletPopup.dismiss();
         walletMenuAnchor = null;
+        viewingSpliceChannel = null; viewingSpliceTxid = null; spliceDetailsText = null; spliceRefreshError = null;
         screen = title;
         ScrollView scroll = new ScrollView(this); page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL); page.setPadding(dp(20), dp(24), dp(20), dp(32));
@@ -1034,7 +1040,7 @@ public final class MainActivity extends Activity {
             boolean retrying = reconnectingPeers.contains(peer);
             String status = online ? "Connected" : retrying ? "Reconnecting" : "Disconnected";
             int color = channel.getActive() ? 0xff65d89a : online || retrying ? 0xffffb454 : 0xffed6b73;
-            homeChannelRow(channels, channel.getChannelPoint(), number++, peer, status, color, "", !online,
+            homeChannelRow(channels, SpliceStatus.identity(channel), number++, peer, status, color, "", channel, !online,
                 channel.getLocalBalance(), channel.getRemoteBalance(), () -> channelDetails(channel));
         }
         for (LightningOuterClass.PendingChannelsResponse.PendingOpenChannel pendingChannel : pending.getPendingOpenChannelsList()) {
@@ -1054,12 +1060,12 @@ public final class MainActivity extends Activity {
             }
             String confirmations = ChannelStatus.confirmations(remaining, confirmedAt, height, required);
             homeChannelRow(channels, channel.getChannelPoint(), number++, peer, status,
-                online || retrying ? 0xffffb454 : 0xffed6b73, confirmations, !online,
+                online || retrying ? 0xffffb454 : 0xffed6b73, confirmations, null, !online,
                 channel.getLocalBalance(), channel.getRemoteBalance(),
                 () -> pendingChannelDetails(channel, "Pending opening · " + pendingChannel.getConfirmationsUntilActive() + " confirmations until active"));
         }
     }
-    private void homeChannelRow(LinearLayout channels, String point, int number, String peer, String status, int color, String confirmations, boolean disconnected, long local, long remote, Runnable details) {
+    private void homeChannelRow(LinearLayout channels, String point, int number, String peer, String status, int color, String confirmations, LightningOuterClass.Channel spliceChannel, boolean disconnected, long local, long remote, Runnable details) {
         // Preserve the Home channel rows at their previous font scale, including accessibility scaling.
         android.content.res.Configuration channelConfig = new android.content.res.Configuration(getResources().getConfiguration());
         channelConfig.fontScale /= 1.10f;
@@ -1113,6 +1119,14 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams barSize = new LinearLayout.LayoutParams(-1, dp(10));
         barSize.leftMargin = dp(4); barSize.rightMargin = dp(12); barSize.bottomMargin = dp(8);
         card.addView(liquidity, barSize);
+        String spliceStatus = spliceChannel == null ? "" : SpliceStatus.summary(spliceChannel, this::displayAmount);
+        if (!spliceStatus.isEmpty()) {
+            TextView splice = new TextView(channelContext); splice.setText(spliceStatus);
+            splice.setTag(spliceChannel); homeChannelBalances.add(splice);
+            splice.setTextSize(12.6f); splice.setTextColor(0xffffb454);
+            splice.setPadding(dp(4), 0, dp(12), dp(8));
+            card.addView(splice, new LinearLayout.LayoutParams(-1, -2));
+        }
         LinearLayout expanded = new LinearLayout(this); expanded.setOrientation(LinearLayout.VERTICAL);
         expanded.setPadding(dp(4), dp(4), dp(12), dp(12));
         LinearLayout balanceRow = new LinearLayout(this);
@@ -1160,7 +1174,7 @@ public final class MainActivity extends Activity {
         card.setTag(expanded);
         expanded.setVisibility(expandedHomeChannels.contains(point) ? View.VISIBLE : View.GONE);
         expanded.setAlpha(expandedHomeChannels.contains(point) ? 1f : 0f);
-        card.setContentDescription(label + ". " + status + ". " + confirmations + ". Local liquidity on the left, remote on the right. Tap to show or hide balances. Touch and hold to edit the channel label.");
+        card.setContentDescription(label + ". " + status + ". " + confirmations + ". " + spliceStatus + ". Local liquidity on the left, remote on the right. Tap to show or hide balances. Touch and hold to edit the channel label.");
         card.setOnLongClickListener(v -> {
             labelChannel(point, this::home);
             return true;
@@ -1324,6 +1338,10 @@ public final class MainActivity extends Activity {
     }
     private void updateBalanceAmounts() {
         for (TextView balances : homeChannelBalances) {
+            if (balances.getTag() instanceof LightningOuterClass.Channel) {
+                balances.setText(SpliceStatus.summary((LightningOuterClass.Channel) balances.getTag(), this::displayAmount));
+                continue;
+            }
             long[] values = (long[]) balances.getTag();
             balances.setText((values[1] == 0 ? "Local: " : "Remote: ") + displayAmount(values[0]));
         }
@@ -1578,7 +1596,7 @@ public final class MainActivity extends Activity {
                 text(count + (count == 1 ? " channel" : " channels"));
                 if (open.getChannelsCount() + pending.getPendingOpenChannelsCount() + pending.getPendingClosingChannelsCount()
                     + pending.getPendingForceClosingChannelsCount() + pending.getWaitingCloseChannelsCount() == 0) text("No open or pending channels.");
-                for (LightningOuterClass.Channel c : open.getChannelsList()) button(channelLabelPrefix(c.getChannelPoint()) + (c.getActive() ? "Open · online" : "Open · offline") + "\n" + channelBalances(c.getLocalBalance(), c.getRemoteBalance()), () -> channelDetails(c));
+                for (LightningOuterClass.Channel c : open.getChannelsList()) button(channelLabelPrefix(SpliceStatus.identity(c)) + (c.getActive() ? "Open · online" : "Open · offline") + "\n" + channelBalances(c.getLocalBalance(), c.getRemoteBalance()) + (c.hasPendingSplice() ? "\n" + SpliceStatus.summary(c, this::displayAmount) : ""), () -> channelDetails(c));
                 for (LightningOuterClass.PendingChannelsResponse.PendingOpenChannel c : pending.getPendingOpenChannelsList()) button(channelLabelPrefix(c.getChannel().getChannelPoint()) + "Pending opening\n" + channelBalances(c.getChannel().getLocalBalance(), c.getChannel().getRemoteBalance()), () -> pendingChannelDetails(c.getChannel(), "Pending opening · " + c.getConfirmationsUntilActive() + " confirmations until active"));
                 for (LightningOuterClass.PendingChannelsResponse.ClosedChannel c : pending.getPendingClosingChannelsList()) button(channelLabelPrefix(c.getChannel().getChannelPoint()) + "Pending closing\n" + channelBalances(c.getChannel().getLocalBalance(), c.getChannel().getRemoteBalance()), () -> pendingChannelDetails(c.getChannel(), "Pending closing"));
                 for (LightningOuterClass.PendingChannelsResponse.ForceClosedChannel c : pending.getPendingForceClosingChannelsList()) button(channelLabelPrefix(c.getChannel().getChannelPoint()) + "Pending force close\n" + channelBalances(c.getChannel().getLocalBalance(), c.getChannel().getRemoteBalance()), () -> pendingChannelDetails(c.getChannel(), "Pending force close"));
@@ -1660,32 +1678,76 @@ public final class MainActivity extends Activity {
     private void channelDetails(LightningOuterClass.Channel channel) {
         rememberChannelOrigin();
         page("Channel details", false, () -> channelDetails(channel));
-        String label = prefs.getString("channel-label-" + channel.getChannelPoint(), "");
+        String label = prefs.getString("channel-label-" + SpliceStatus.identity(channel), "");
         if (!label.isEmpty()) text(label);
-        button(label.isEmpty() ? "Add label" : "Edit label", () -> labelChannel(channel.getChannelPoint(), () -> channelDetails(channel)));
+        button(label.isEmpty() ? "Add label" : "Edit label", () -> labelChannel(SpliceStatus.identity(channel), () -> channelDetails(channel)));
         text((channel.getActive() ? "Online" : "Offline") + " · " + channel.getCapacity() + " sats capacity");
         text(channel.getLocalBalance() + " sats local balance\n" + channel.getRemoteBalance() + " sats remote balance");
         text("Peer\n" + channel.getRemotePubkey());
         fundingOutput(channel.getChannelPoint());
-        String key = "channel-close-" + channel.getChannelPoint();
-        String closing = prefs.getString(key, "");
-        if (!closing.isEmpty()) text(closing);
-        text("Closing returns your remaining funds to your on-chain wallet after fees and confirmation. A cooperative close requires the peer to be online.");
-        EditText rate = field("Closing fee rate in sats/vbyte", "1");
-        Button close = button("Close Channel", () -> {
-            try {
-                long fee = Policy.amount(rate.getText().toString());
-                new WalletDialogBuilder().setTitle("Close this channel?")
-                    .setMessage("Your local balance is " + channel.getLocalBalance() + " sats before closing fees.\nFee rate: " + fee + " sats/vbyte.\nThis channel will no longer be available for payments. Funds return on-chain after confirmation.")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Close Channel", (dialog, which) -> closeChannel(channel, fee)).show();
-            } catch (Exception e) { error(e); }
-        });
-        close.setEnabled(channel.getActive() && closing.isEmpty());
-        if (!channel.getActive()) text("Reconnect to the peer before closing cooperatively.");
+        if (channel.hasPendingSplice()) {
+            viewingSpliceChannel = SpliceStatus.identity(channel);
+            spliceDetailsText = text(SpliceStatus.details(channel, this::displayAmount));
+            spliceDetailsText.setTextColor(0xffffb454);
+            spliceRefreshError = text(""); spliceRefreshError.setTextColor(0xffed6b73);
+            String txid = channel.getPendingSplice().getTxid();
+            viewingSpliceTxid = txid;
+            if (!txid.isEmpty()) {
+                TextView tx = text("Splice transaction\n" + txid);
+                tx.setContentDescription("Splice transaction. Tap to copy.");
+                tx.setOnClickListener(v -> {
+                    getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Splice transaction", txid));
+                    Toast.makeText(this, "Splice transaction copied", Toast.LENGTH_SHORT).show();
+                });
+            }
+            button("Refresh splice status", this::refreshSpliceDetails);
+            text("Wait for the pending splice to finish before closing this channel.");
+        } else {
+            String key = "channel-close-" + channel.getChannelPoint();
+            String closing = prefs.getString(key, "");
+            if (!closing.isEmpty()) text(closing);
+            text("Closing returns your remaining funds to your on-chain wallet after fees and confirmation. A cooperative close requires the peer to be online.");
+            EditText rate = field("Closing fee rate in sats/vbyte", "1");
+            Button close = button("Close Channel", () -> {
+                try {
+                    long fee = Policy.amount(rate.getText().toString());
+                    new WalletDialogBuilder().setTitle("Close this channel?")
+                        .setMessage("Your local balance is " + channel.getLocalBalance() + " sats before closing fees.\nFee rate: " + fee + " sats/vbyte.\nThis channel will no longer be available for payments. Funds return on-chain after confirmation.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Close Channel", (dialog, which) -> closeChannel(channel, fee)).show();
+                } catch (Exception e) { error(e); }
+            });
+            close.setEnabled(channel.getActive() && closing.isEmpty());
+            if (!channel.getActive()) text("Reconnect to the peer before closing cooperatively.");
+        }
         button(channelDetailsFromHome ? "Home" : "Back to channels",
             channelDetailsFromHome ? this::home : this::channelList);
     }
+    private void refreshSpliceDetails() {
+        final String identity = viewingSpliceChannel;
+        if (identity == null) return;
+        work(() -> {
+            try {
+                LightningOuterClass.ListChannelsResponse response = LightningOuterClass.ListChannelsResponse.parseFrom(
+                    node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
+                LightningOuterClass.Channel found = null;
+                for (LightningOuterClass.Channel c : response.getChannelsList()) if (SpliceStatus.identity(c).equals(identity)) { found = c; break; }
+                if (found == null) throw new Exception("Channel not found in the node response. Refresh Channels.");
+                final LightningOuterClass.Channel current = found;
+                runOnUiThread(() -> {
+                    if (!screen.equals("Channel details") || !identity.equals(viewingSpliceChannel)) return;
+                    if (!current.hasPendingSplice() || !current.getPendingSplice().getTxid().equals(viewingSpliceTxid)) { channelDetails(current); return; }
+                    spliceDetailsText.setText(SpliceStatus.details(current, this::displayAmount));
+                    spliceRefreshError.setText("");
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (screen.equals("Channel details") && identity.equals(viewingSpliceChannel)) spliceRefreshError.setText("Splice status refresh failed: " + e.getMessage());
+                });
+            }
+        });
+    }
+
     private void closeChannel(LightningOuterClass.Channel channel, long fee) {
         work(() -> {
             final String key = "channel-close-" + channel.getChannelPoint();
@@ -1694,7 +1756,10 @@ public final class MainActivity extends Activity {
             LightningOuterClass.ListChannelsResponse current = LightningOuterClass.ListChannelsResponse.parseFrom(node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
             boolean online = false;
             for (LightningOuterClass.Channel c : current.getChannelsList())
-                if (c.getChannelPoint().equals(channel.getChannelPoint())) online = c.getActive();
+                if (c.getChannelPoint().equals(channel.getChannelPoint())) {
+                    if (c.hasPendingSplice()) throw new Exception("A splice is pending. Wait for it to finish before closing this channel.");
+                    online = c.getActive();
+                }
             if (!online) throw new Exception("This channel is no longer open and online. Refresh the channel list.");
             String[] point = channel.getChannelPoint().split(":");
             LightningOuterClass.CloseChannelRequest request = LightningOuterClass.CloseChannelRequest.newBuilder()

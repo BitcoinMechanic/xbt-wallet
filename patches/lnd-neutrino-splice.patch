@@ -1,0 +1,419 @@
+diff --git a/lnwallet/btcwallet/splice_neutrino.go b/lnwallet/btcwallet/splice_neutrino.go
+new file mode 100644
+index 000000000..9a4a5517a
+--- /dev/null
++++ b/lnwallet/btcwallet/splice_neutrino.go
+@@ -0,0 +1,106 @@
++package btcwallet
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"time"
++
++	"github.com/btcsuite/btcd/blockchain"
++	"github.com/btcsuite/btcd/btcutil"
++	"github.com/btcsuite/btcd/btcutil/gcs"
++	"github.com/btcsuite/btcd/btcutil/gcs/builder"
++	"github.com/btcsuite/btcd/chaincfg/chainhash"
++	"github.com/btcsuite/btcd/wire"
++	"github.com/btcsuite/btcwallet/chain"
++	"github.com/lightninglabs/neutrino"
++)
++
++// GetUtxoDetailsWithScript verifies peer splice inputs on Neutrino without
++// trusting a peer-supplied value or an external explorer. Search backwards for
++// the creating transaction, then scan forwards from that block for spends.
++// A missing, spent, reorged or incompletely checked output always fails closed.
++func (b *BtcWallet) GetUtxoDetailsWithScript(op *wire.OutPoint, script []byte,
++	cancel <-chan struct{}) (*wire.TxOut, uint32, bool, error) {
++	backend, ok := b.chain.(*chain.NeutrinoClient)
++	if !ok {
++		return b.GetUtxoDetails(op)
++	}
++	return verifyNeutrinoSpliceOutput(op, script, cancel, backend.CS, b.GetBestBlock, b.GetUtxo)
++}
++
++type spliceFilterChain interface {
++	GetBlockHash(int64) (*chainhash.Hash, error)
++	GetCFilter(chainhash.Hash, wire.FilterType, ...neutrino.QueryOption) (*gcs.Filter, error)
++	GetBlock(chainhash.Hash, ...neutrino.QueryOption) (*btcutil.Block, error)
++}
++
++func verifyNeutrinoSpliceOutput(op *wire.OutPoint, script []byte, cancel <-chan struct{}, cs spliceFilterChain,
++	best func() (*chainhash.Hash, int32, error),
++	unspentOutput func(*wire.OutPoint, []byte, uint32, <-chan struct{}) (*wire.TxOut, error)) (*wire.TxOut, uint32, bool, error) {
++	tip, height, err := best()
++	if err != nil {
++		return nil, 0, false, err
++	}
++	query := []neutrino.QueryOption{neutrino.Timeout(2 * time.Second), neutrino.NumRetries(1)}
++	for h := height; h > 0; h-- {
++		select {
++		case <-cancel:
++			return nil, 0, false, errors.New("splice input verification cancelled")
++		default:
++		}
++		hash, err := cs.GetBlockHash(int64(h))
++		if err != nil {
++			return nil, 0, false, err
++		}
++		filter, err := cs.GetCFilter(*hash, wire.GCSFilterRegular,
++			append(query, neutrino.OptimisticReverseBatch(), neutrino.MaxBatchSize(500))...)
++		if err != nil {
++			return nil, 0, false, err
++		}
++		if filter == nil {
++			return nil, 0, false, errors.New("missing compact filter")
++		}
++		match, err := filter.Match(builder.DeriveKey(hash), script)
++		if err != nil {
++			return nil, 0, false, err
++		}
++		if !match {
++			continue
++		}
++		block, err := cs.GetBlock(*hash, query...)
++		if err != nil {
++			return nil, 0, false, err
++		}
++		for _, tx := range block.Transactions() {
++			if tx.Hash().IsEqual(&op.Hash) {
++				if int(op.Index) >= len(tx.MsgTx().TxOut) {
++					return nil, 0, false, ErrOutputNotFound
++				}
++				out := tx.MsgTx().TxOut[op.Index]
++				if !bytes.Equal(script, out.PkScript) {
++					return nil, 0, false, errors.New("peer input script does not match confirmed transaction")
++				}
++				if blockchain.IsCoinBaseTx(tx.MsgTx()) {
++					return out, uint32(height - h + 1), true, nil
++				}
++				unspent, err := unspentOutput(op, script, uint32(h), cancel)
++				if err != nil {
++					return nil, 0, false, fmt.Errorf("peer input spend scan: %w", err)
++				}
++				if unspent == nil || unspent.Value != out.Value || !bytes.Equal(unspent.PkScript, out.PkScript) {
++					return nil, 0, false, errors.New("unspent output does not match confirmed transaction")
++				}
++				endTip, _, err := best()
++				if err != nil {
++					return nil, 0, false, err
++				}
++				if !endTip.IsEqual(tip) {
++					return nil, 0, false, errors.New("chain tip changed during splice input verification; retry after checking channel state")
++				}
++				return out, uint32(height - h + 1), false, nil
++			}
++		}
++	}
++	return nil, 0, false, ErrOutputNotFound
++}
+diff --git a/lnwallet/btcwallet/splice_neutrino_test.go b/lnwallet/btcwallet/splice_neutrino_test.go
+new file mode 100644
+index 000000000..a1dc8d259
+--- /dev/null
++++ b/lnwallet/btcwallet/splice_neutrino_test.go
+@@ -0,0 +1,102 @@
++package btcwallet
++
++import (
++	"errors"
++	"github.com/btcsuite/btcd/btcutil"
++	"github.com/btcsuite/btcd/btcutil/gcs"
++	"github.com/btcsuite/btcd/btcutil/gcs/builder"
++	"github.com/btcsuite/btcd/chaincfg/chainhash"
++	"github.com/btcsuite/btcd/wire"
++	"github.com/lightninglabs/neutrino"
++	"github.com/stretchr/testify/require"
++	"testing"
++)
++
++type spliceFilterFixture struct {
++	block  *btcutil.Block
++	filter *gcs.Filter
++}
++
++func (f spliceFilterFixture) GetBlockHash(int64) (*chainhash.Hash, error) { return f.block.Hash(), nil }
++func (f spliceFilterFixture) GetCFilter(chainhash.Hash, wire.FilterType, ...neutrino.QueryOption) (*gcs.Filter, error) {
++	return f.filter, nil
++}
++func (f spliceFilterFixture) GetBlock(chainhash.Hash, ...neutrino.QueryOption) (*btcutil.Block, error) {
++	return f.block, nil
++}
++
++func TestNeutrinoSpliceInputVerification(t *testing.T) {
++	for _, name := range []string{"unspent", "spent", "missing", "script mismatch", "wrong value", "coinbase", "reorg", "cancelled", "nil filter"} {
++		t.Run(name, func(t *testing.T) {
++			script := append([]byte{0, 20}, make([]byte, 20)...)
++			tx := wire.NewMsgTx(2)
++			prev := wire.OutPoint{Hash: chainhash.Hash{1}, Index: 0}
++			if name == "coinbase" {
++				prev = wire.OutPoint{Index: 0xffffffff}
++			}
++			tx.AddTxIn(wire.NewTxIn(&prev, nil, nil))
++			tx.AddTxOut(&wire.TxOut{Value: 1000000, PkScript: script})
++			block := btcutil.NewBlock(&wire.MsgBlock{Transactions: []*wire.MsgTx{tx}})
++			filter, err := builder.WithKeyHash(block.Hash()).AddEntry(script).Build()
++			require.NoError(t, err)
++			fixture := spliceFilterFixture{block, filter}
++			if name == "nil filter" {
++				fixture.filter = nil
++			}
++			op := wire.OutPoint{Hash: tx.TxHash(), Index: 0}
++			if name == "missing" {
++				op.Hash = chainhash.Hash{99}
++			}
++			if name == "script mismatch" {
++				tx.TxOut[0].PkScript = []byte{0, 1}
++				op.Hash = tx.TxHash()
++			}
++			cancel := make(chan struct{})
++			if name == "cancelled" {
++				close(cancel)
++			}
++			calls := 0
++			best := func() (*chainhash.Hash, int32, error) {
++				calls++
++				if name == "reorg" && calls > 1 {
++					return &chainhash.Hash{2}, 2, nil
++				}
++				return block.Hash(), 1, nil
++			}
++			scanned := false
++			unspent := func(got *wire.OutPoint, gotScript []byte, h uint32, c <-chan struct{}) (*wire.TxOut, error) {
++				scanned = true
++				require.Equal(t, &op, got)
++				require.Equal(t, script, gotScript)
++				require.EqualValues(t, 1, h)
++				require.Equal(t, (<-chan struct{})(cancel), c)
++				if name == "spent" {
++					return nil, ErrOutputSpent
++				}
++				if name == "wrong value" {
++					return &wire.TxOut{Value: 1, PkScript: script}, nil
++				}
++				return tx.TxOut[0], nil
++			}
++			out, confs, coinbase, err := verifyNeutrinoSpliceOutput(&op, script, cancel, fixture, best, unspent)
++			switch name {
++			case "unspent":
++				require.NoError(t, err)
++				require.EqualValues(t, 1000000, out.Value)
++				require.EqualValues(t, 1, confs)
++				require.False(t, coinbase)
++				require.True(t, scanned)
++			case "coinbase":
++				require.NoError(t, err)
++				require.True(t, coinbase)
++				require.False(t, scanned)
++			default:
++				require.Error(t, err)
++				require.Nil(t, out)
++				if name == "spent" {
++					require.True(t, errors.Is(err, ErrOutputSpent))
++				}
++			}
++		})
++	}
++}
+diff --git a/lnwallet/splice/acceptor.go b/lnwallet/splice/acceptor.go
+index 237f9290a..5cbbbca4e 100644
+--- a/lnwallet/splice/acceptor.go
++++ b/lnwallet/splice/acceptor.go
+@@ -288,7 +288,17 @@ func (m *Machine) checkPeerInput(in *interactivetx.Input) error {
+ 		return fmt.Errorf("input %v is ours", in.OutPoint)
+ 	}
+ 
+-	out, confs, coinbase, err := m.cfg.Chain.ConfirmedOutput(in.OutPoint)
++	var out *wire.TxOut
++	var confs uint32
++	var coinbase bool
++	var err error
++	if chain, ok := m.cfg.Chain.(interface {
++		ConfirmedOutputWithScript(wire.OutPoint, []byte) (*wire.TxOut, uint32, bool, error)
++	}); ok {
++		out, confs, coinbase, err = chain.ConfirmedOutputWithScript(in.OutPoint, in.PkScript)
++	} else {
++		out, confs, coinbase, err = m.cfg.Chain.ConfirmedOutput(in.OutPoint)
++	}
+ 	switch {
+ 	case err != nil:
+ 		return fmt.Errorf("input %v not found unspent: %w",
+diff --git a/rpcserver_splice.go b/rpcserver_splice.go
+index 97a1e7ca3..1a59af0f8 100644
+--- a/rpcserver_splice.go
++++ b/rpcserver_splice.go
+@@ -624,6 +624,12 @@ func (r *rpcServer) spliceConfirmations(rec *channeldb.SpliceRecord) uint32 {
+ 	if !spliceWentOut(rec) {
+ 		return 0
+ 	}
++	// Splice publication stores our signed transaction in the wallet. Its
++	// mined block is tracked by Neutrino, which has no gettxout RPC. This is
++	// confirmation reporting only; peer input validation remains separate.
++	if r.cfg.Bitcoin.Node == neutrinoBackendName {
++		return walletSpliceConfirmations(r.server.cc.Wallet.WalletController, rec.OutPoint.Hash)
++	}
+ 	chain := &spliceChain{wallet: r.server.cc.Wallet.WalletController}
+ 	_, confs, _, err := chain.ConfirmedOutput(rec.OutPoint)
+ 	if err != nil {
+@@ -633,6 +639,18 @@ func (r *rpcServer) spliceConfirmations(rec *channeldb.SpliceRecord) uint32 {
+ 	return confs
+ }
+ 
++func walletSpliceConfirmations(wallet lnwallet.WalletController, txid chainhash.Hash) uint32 {
++	tx, err := wallet.GetTransactionDetails(&txid)
++	if err != nil {
++		rpcsLog.Warnf("Unable to read splice transaction %v confirmations from wallet: %v", txid, err)
++		return 0
++	}
++	if tx == nil || tx.NumConfirmations < 0 {
++		return 0
++	}
++	return uint32(tx.NumConfirmations)
++}
++
+ // How long a peer may take over the steps after a splice confirms before
+ // the channel's status says so: splice_locked within 144 blocks of our
+ // lock depth, and its half of the announcement within 72 blocks of the
+diff --git a/rpcserver_splice_test.go b/rpcserver_splice_test.go
+index 82645509a..ebc1d013f 100644
+--- a/rpcserver_splice_test.go
++++ b/rpcserver_splice_test.go
+@@ -1,6 +1,9 @@
+ package lnd
+ 
+ import (
++	"errors"
++	"github.com/btcsuite/btcd/chaincfg/chainhash"
++	"github.com/lightningnetwork/lnd/lnwallet"
+ 	"testing"
+ 
+ 	"github.com/btcsuite/btcd/btcutil"
+@@ -70,3 +73,27 @@ func TestSpliceRequestRanges(t *testing.T) {
+ 		require.ErrorContains(t, err, tc.want)
+ 	}
+ }
++
++// The wallet knows confirmations of its published splice even when Neutrino
++// cannot answer gettxout. Conflicted values must not wrap to a huge uint32.
++type spliceConfirmationWallet struct {
++	lnwallet.WalletController
++	detail *lnwallet.TransactionDetail
++	err    error
++}
++
++func (w *spliceConfirmationWallet) GetTransactionDetails(*chainhash.Hash) (*lnwallet.TransactionDetail, error) {
++	return w.detail, w.err
++}
++func TestWalletSpliceConfirmations(t *testing.T) {
++	for _, n := range []int32{0, 1, 7, 21, -1} {
++		w := &spliceConfirmationWallet{detail: &lnwallet.TransactionDetail{NumConfirmations: n}}
++		expected := uint32(0)
++		if n > 0 {
++			expected = uint32(n)
++		}
++		require.Equal(t, expected, walletSpliceConfirmations(w, chainhash.Hash{}))
++	}
++	require.Zero(t, walletSpliceConfirmations(&spliceConfirmationWallet{err: errors.New("transaction unavailable")}, chainhash.Hash{}))
++	require.Zero(t, walletSpliceConfirmations(&spliceConfirmationWallet{}, chainhash.Hash{}))
++}
+diff --git a/server_splice.go b/server_splice.go
+index 30e7a3015..e5a1127c9 100644
+--- a/server_splice.go
++++ b/server_splice.go
+@@ -135,6 +135,37 @@ func (c *spliceChain) ConfirmedOutput(op wire.OutPoint) (*wire.TxOut, uint32,
+ 	}
+ }
+ 
++// ConfirmedOutputWithScript also supports compact-filter backends. The script
++// is a search hint, never evidence: the wallet verifies the creating block and
++// scans for spends before accepting the output.
++func (c *spliceChain) ConfirmedOutputWithScript(op wire.OutPoint, script []byte) (*wire.TxOut, uint32, bool, error) {
++	d, ok := baseWallet(c.wallet).(interface {
++		GetUtxoDetailsWithScript(*wire.OutPoint, []byte, <-chan struct{}) (*wire.TxOut, uint32, bool, error)
++	})
++	if !ok {
++		return c.ConfirmedOutput(op)
++	}
++	cancel := make(chan struct{})
++	defer close(cancel)
++	type answer struct {
++		out      *wire.TxOut
++		confs    uint32
++		coinbase bool
++		err      error
++	}
++	done := make(chan answer, 1)
++	go func() {
++		out, confs, coinbase, err := d.GetUtxoDetailsWithScript(&op, script, cancel)
++		done <- answer{out, confs, coinbase, err}
++	}()
++	select {
++	case a := <-done:
++		return a.out, a.confs, a.coinbase, a.err
++	case <-time.After(confirmedOutputTimeout):
++		return nil, 0, false, fmt.Errorf("backend did not finish verifying confirmation and unspent status of %v within %v; no input accepted", op, confirmedOutputTimeout)
++	}
++}
++
+ // Synced implements splice.Chain: whether this node has processed the
+ // backend's tip, and the backend isn't itself still catching up.
+ func (c *spliceChain) Synced() bool {
+diff --git a/server_splice_chain_test.go b/server_splice_chain_test.go
+index b894ee46a..083eaa6ec 100644
+--- a/server_splice_chain_test.go
++++ b/server_splice_chain_test.go
+@@ -1,6 +1,7 @@
+ package lnd
+ 
+ import (
++	"errors"
+ 	"testing"
+ 	"time"
+ 
+@@ -136,3 +137,43 @@ func TestSpliceChainSynced(t *testing.T) {
+ 		chainSynced: true, to: stamp(100, 25*time.Hour),
+ 	}).Synced(), "a tip a day old: the backend is behind")
+ }
++
++// Script-aware validation must receive the actual peer script and cancel work
++// on timeout rather than leave an unbounded background scan running.
++type scriptedSpliceWallet struct {
++	lnwallet.WalletController
++	wait      bool
++	cancelled chan struct{}
++	script    []byte
++}
++
++func (w *scriptedSpliceWallet) GetUtxoDetailsWithScript(_ *wire.OutPoint, script []byte, cancel <-chan struct{}) (*wire.TxOut, uint32, bool, error) {
++	w.script = append([]byte(nil), script...)
++	if w.wait {
++		<-cancel
++		close(w.cancelled)
++		return nil, 0, false, errors.New("cancelled")
++	}
++	return &wire.TxOut{Value: 42, PkScript: script}, 2, false, nil
++}
++func TestSpliceScriptAwareBackend(t *testing.T) {
++	old := confirmedOutputTimeout
++	confirmedOutputTimeout = 20 * time.Millisecond
++	t.Cleanup(func() { confirmedOutputTimeout = old })
++	w := &scriptedSpliceWallet{}
++	c := &spliceChain{wallet: w}
++	out, confs, _, err := c.ConfirmedOutputWithScript(wire.OutPoint{}, []byte{0, 20})
++	require.NoError(t, err)
++	require.EqualValues(t, 42, out.Value)
++	require.EqualValues(t, 2, confs)
++	require.Equal(t, []byte{0, 20}, w.script)
++	w = &scriptedSpliceWallet{wait: true, cancelled: make(chan struct{})}
++	c.wallet = w
++	_, _, _, err = c.ConfirmedOutputWithScript(wire.OutPoint{}, []byte{0, 20})
++	require.ErrorContains(t, err, "no input accepted")
++	select {
++	case <-w.cancelled:
++	case <-time.After(time.Second):
++		t.Fatal("verification not cancelled")
++	}
++}
