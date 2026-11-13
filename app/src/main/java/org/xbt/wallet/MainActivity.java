@@ -209,6 +209,8 @@ public final class MainActivity extends Activity {
     private final android.animation.ValueAnimator[] homeActionsAnimation = new android.animation.ValueAnimator[2];
     private final Button[] balanceAmounts = new Button[3];
     private final long[] balanceSats = new long[3];
+    private TextView unconfirmedBalanceText;
+    private long unconfirmedBalanceSats;
     private boolean ratesLoading;
     private long lastRatesAttempt;
     private org.json.JSONObject fiatRates;
@@ -281,6 +283,7 @@ public final class MainActivity extends Activity {
         recordNavigation(title, restore);
         if (onboardingReveal != null) { onboardingReveal.cancel(); onboardingReveal = null; }
         activeAmountEntry = null;
+        unconfirmedBalanceText = null;
         for (android.animation.ValueAnimator animation : new ArrayList<>(channelExpansions.values())) animation.cancel();
         channelExpansions.clear(); homeChannelBalances.clear();
         // Allow remote UI testing only in debug builds on the valueless test chain.
@@ -978,6 +981,7 @@ public final class MainActivity extends Activity {
                     receivable = Math.addExact(receivable, channel.getRemoteBalance());
                 }
                 if (!info.getSyncedToChain()) text("Syncing chain · block " + info.getBlockHeight());
+                unconfirmedBalanceSats = balance.getUnconfirmedBalance();
                 homeBalances(balance.getTotalBalance(), channelFunds, receivable);
                 boolean hasPublic = false;
                 for (LightningOuterClass.Channel c : active.getChannelsList()) hasPublic |= !c.getPrivate();
@@ -1325,6 +1329,14 @@ public final class MainActivity extends Activity {
         }
         LinearLayout.LayoutParams rowSize = new LinearLayout.LayoutParams(-1, -2); rowSize.topMargin = dp(8); rowSize.bottomMargin = dp(8);
         page.addView(balanceRow, rowSize);
+        if (index == 0 && unconfirmedBalanceSats > 0) {
+            unconfirmedBalanceText = new TextView(this);
+            unconfirmedBalanceText.setTextSize(12);
+            unconfirmedBalanceText.setTextColor(0xffe8d2a7);
+            unconfirmedBalanceText.setGravity(Gravity.END);
+            unconfirmedBalanceText.setPadding(0, 0, dp(4), dp(4));
+            page.addView(unconfirmedBalanceText, new LinearLayout.LayoutParams(-1, -2));
+        }
         actions.setPadding(dp(4), dp(4), dp(4), dp(12));
         page.addView(actions, new LinearLayout.LayoutParams(-1, -2));
         Button send = button("Send", sendAction), receive = button("Receive", receiveAction);
@@ -1337,6 +1349,8 @@ public final class MainActivity extends Activity {
         actions.setAlpha(homeActionsExpanded[index] ? 1f : 0f);
     }
     private void updateBalanceAmounts() {
+        if (unconfirmedBalanceText != null)
+            unconfirmedBalanceText.setText("Includes " + displayAmount(unconfirmedBalanceSats) + " unconfirmed");
         for (TextView balances : homeChannelBalances) {
             if (balances.getTag() instanceof LightningOuterClass.Channel) {
                 balances.setText(SpliceStatus.summary((LightningOuterClass.Channel) balances.getTag(), this::displayAmount));

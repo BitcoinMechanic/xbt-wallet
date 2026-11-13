@@ -8,6 +8,32 @@ import routerrpc.RouterOuterClass;
 /** Mutation contracts use a fake transport; never sends funds or changes any node. */
 public class ClnRemoteContractTest {
     private static final String HASH="ab".repeat(32), ID="02"+"cd".repeat(32);
+
+    @Test public void unconfirmedDepositsReachBalancesOutputsAndReceiptDetection() throws Exception {
+        JSONObject coin = new JSONObject().put("txid", HASH).put("output", 0)
+            .put("amount_msat", 12500000).put("address", "receive-address")
+            .put("scriptpubkey", "0014" + "ab".repeat(20)).put("status", "unconfirmed");
+        ClnRemote node = new ClnRemote((method,args) -> {
+            switch (method) {
+            case "getinfo": return new JSONObject().put("blockheight", 100);
+            case "listfunds": return new JSONObject().put("outputs", new JSONArray().put(coin));
+            case "listtransactions": return new JSONObject().put("transactions", new JSONArray().put(
+                new JSONObject().put("hash", HASH).put("blockheight", coin.optInt("blockheight"))
+                    .put("inputs", new JSONArray()).put("outputs", new JSONArray().put(new JSONObject().put("index", 0)))));
+            default: throw new AssertionError(method);
+            }
+        }, "mainnet", ID);
+        WalletBalanceResponse balance = WalletBalanceResponse.parseFrom(node.rpc("walletBalance", WalletBalanceRequest.getDefaultInstance()));
+        assertEquals(12500, balance.getTotalBalance()); assertEquals(12500, balance.getUnconfirmedBalance()); assertEquals(0, balance.getConfirmedBalance());
+        ListUnspentResponse outputs = ListUnspentResponse.parseFrom(node.rpc("listUnspent", ListUnspentRequest.newBuilder().setMinConfs(0).build()));
+        assertEquals(1, outputs.getUtxosCount()); assertEquals(0, outputs.getUtxos(0).getConfirmations());
+        assertEquals(0, ListUnspentResponse.parseFrom(node.rpc("listUnspent", ListUnspentRequest.newBuilder().setMinConfs(1).build())).getUtxosCount());
+        TransactionDetails txs = TransactionDetails.parseFrom(node.rpc("getTransactions", GetTransactionsRequest.getDefaultInstance()));
+        assertTrue(DepositDetection.received("receive-address", java.util.Collections.emptySet(), txs));
+        coin.put("status", "confirmed").put("blockheight", 100);
+        balance = WalletBalanceResponse.parseFrom(node.rpc("walletBalance", WalletBalanceRequest.getDefaultInstance()));
+        assertEquals(12500, balance.getTotalBalance()); assertEquals(0, balance.getUnconfirmedBalance()); assertEquals(12500, balance.getConfirmedBalance());
+    }
     @Test public void bolt12CreationListingAndDisableUseNativeOfferRpc() throws Exception {
         java.util.List<String> calls=new java.util.ArrayList<>();
         ClnRemote node=new ClnRemote((method,args)->{
