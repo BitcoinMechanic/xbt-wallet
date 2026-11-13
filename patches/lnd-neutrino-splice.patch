@@ -242,82 +242,163 @@ index 237f9290a..5cbbbca4e 100644
  	case err != nil:
  		return fmt.Errorf("input %v not found unspent: %w",
 diff --git a/rpcserver_splice.go b/rpcserver_splice.go
-index 97a1e7ca3..1a59af0f8 100644
+index 97a1e7ca3..04387a4f1 100644
 --- a/rpcserver_splice.go
 +++ b/rpcserver_splice.go
-@@ -624,6 +624,12 @@ func (r *rpcServer) spliceConfirmations(rec *channeldb.SpliceRecord) uint32 {
+@@ -7,6 +7,8 @@ import (
+ 	"fmt"
+ 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+ 	"github.com/btcsuite/btcwallet/waddrmgr"
++	"github.com/lightningnetwork/lnd/chainntnfs"
++	"time"
+ 
+ 	"github.com/btcsuite/btcd/btcutil"
+ 	"github.com/btcsuite/btcd/txscript"
+@@ -586,7 +588,7 @@ func (r *rpcServer) addSpliceFields(ch *channeldb.OpenChannel,
+ 			channel.PendingSplice.RelayReason = relay.Reason
+ 		}
+ 		setSpliceDepth(
+-			channel.PendingSplice, r.spliceConfirmations(latest),
++			channel.PendingSplice, r.spliceConfirmations(ch, latest),
+ 			spliceLockDepth(
+ 				ch.NumConfsRequired,
+ 				latest.PeerAtRisk(),
+@@ -620,10 +622,39 @@ func (r *rpcServer) addSpliceFields(ch *channeldb.OpenChannel,
+ // spliceConfirmations returns the confirmations of a splice's new funding
+ // output, 0 while it is unconfirmed or can't be checked. One backend call,
+ // only for a splice that went out.
+-func (r *rpcServer) spliceConfirmations(rec *channeldb.SpliceRecord) uint32 {
++func (r *rpcServer) spliceConfirmations(ch *channeldb.OpenChannel, rec *channeldb.SpliceRecord) uint32 {
  	if !spliceWentOut(rec) {
  		return 0
  	}
-+	// Splice publication stores our signed transaction in the wallet. Its
-+	// mined block is tracked by Neutrino, which has no gettxout RPC. This is
-+	// confirmation reporting only; peer input validation remains separate.
++
++	// Query the notifier independently of the peer's splice machine: progress
++	// must remain available while the peer is disconnected or still starting.
 +	if r.cfg.Bitcoin.Node == neutrinoBackendName {
-+		return walletSpliceConfirmations(r.server.cc.Wallet.WalletController, rec.OutPoint.Hash)
++		n := rec.Negotiation
++		if n == nil || n.Tx == nil || int(rec.OutPoint.Index) >= len(n.Tx.TxOut) {
++			return 0
++		}
++		hint := n.BroadcastHeight
++		if hint == 0 {
++			hint = max(ch.CurrentShortChanID().BlockHeight, 1)
++		}
++		event, err := r.server.cc.ChainNotifier.RegisterConfirmationsNtfn(
++			&rec.OutPoint.Hash, n.Tx.TxOut[rec.OutPoint.Index].PkScript, 1, hint,
++		)
++		if err != nil {
++			rpcsLog.Warnf("Unable to inspect splice confirmations: %v", err)
++			return 0
++		}
++		defer event.Cancel()
++		// Historical scans run asynchronously. Bound this status read; a later
++		// refresh can use the notifier's completed historical lookup.
++		timer := time.NewTimer(250 * time.Millisecond)
++		defer timer.Stop()
++		return notifiedSpliceConfirmations(event, timer.C, func() (int32, error) {
++			_, height, err := r.server.cc.ChainIO.GetBestBlock()
++			return height, err
++		})
 +	}
  	chain := &spliceChain{wallet: r.server.cc.Wallet.WalletController}
  	_, confs, _, err := chain.ConfirmedOutput(rec.OutPoint)
  	if err != nil {
-@@ -633,6 +639,18 @@ func (r *rpcServer) spliceConfirmations(rec *channeldb.SpliceRecord) uint32 {
+@@ -633,6 +664,32 @@ func (r *rpcServer) spliceConfirmations(rec *channeldb.SpliceRecord) uint32 {
  	return confs
  }
  
-+func walletSpliceConfirmations(wallet lnwallet.WalletController, txid chainhash.Hash) uint32 {
-+	tx, err := wallet.GetTransactionDetails(&txid)
-+	if err != nil {
-+		rpcsLog.Warnf("Unable to read splice transaction %v confirmations from wallet: %v", txid, err)
++// notifiedSpliceConfirmations uses verified inclusion and the current chain
++// height, never the wallet's potentially unconfirmed transaction-store entry.
++func notifiedSpliceConfirmations(event *chainntnfs.ConfirmationEvent, timeout <-chan time.Time,
++	bestHeight func() (int32, error)) uint32 {
++	select {
++	case conf, ok := <-event.Confirmed:
++		if !ok || conf == nil {
++			return 0
++		}
++		height, err := bestHeight()
++		if err != nil || height < 0 || uint32(height) < conf.BlockHeight {
++			return 0
++		}
++		select {
++		case <-event.NegativeConf:
++			return 0
++		default:
++		}
++		return uint32(height) - conf.BlockHeight + 1
++	case <-event.NegativeConf:
++		return 0
++	case <-timeout:
 +		return 0
 +	}
-+	if tx == nil || tx.NumConfirmations < 0 {
-+		return 0
-+	}
-+	return uint32(tx.NumConfirmations)
 +}
 +
  // How long a peer may take over the steps after a splice confirms before
  // the channel's status says so: splice_locked within 144 blocks of our
  // lock depth, and its half of the announcement within 72 blocks of the
+@@ -660,7 +717,7 @@ func (r *rpcServer) peerNotLocked(ch *channeldb.OpenChannel) bool {
+ 			rec.PeerAtRisk(),
+ 			r.cfg.ProtocolOptions.SplicePeerInputConfs,
+ 		)
+-		if spliceOverdue(r.spliceConfirmations(rec), depth,
++		if spliceOverdue(r.spliceConfirmations(ch, rec), depth,
+ 			spliceLockedGrace) {
+ 
+ 			return true
+@@ -901,7 +958,7 @@ func (r *rpcServer) addSpliceBalances(channels []*channeldb.OpenChannel,
+ 
+ 			recIn, recToWallet := spliceBalances(
+ 				rec, func() uint32 {
+-					return r.spliceConfirmations(rec)
++					return r.spliceConfirmations(ch, rec)
+ 				}, r.ourOutputs,
+ 			)
+ 			in += recIn
 diff --git a/rpcserver_splice_test.go b/rpcserver_splice_test.go
-index 82645509a..ebc1d013f 100644
+index 82645509a..6f3e963d8 100644
 --- a/rpcserver_splice_test.go
 +++ b/rpcserver_splice_test.go
-@@ -1,6 +1,9 @@
+@@ -1,7 +1,9 @@
  package lnd
  
  import (
-+	"errors"
-+	"github.com/btcsuite/btcd/chaincfg/chainhash"
-+	"github.com/lightningnetwork/lnd/lnwallet"
++	"github.com/lightningnetwork/lnd/chainntnfs"
  	"testing"
++	"time"
  
  	"github.com/btcsuite/btcd/btcutil"
-@@ -70,3 +73,27 @@ func TestSpliceRequestRanges(t *testing.T) {
+ 	"github.com/lightningnetwork/lnd/lnrpc"
+@@ -70,3 +72,30 @@ func TestSpliceRequestRanges(t *testing.T) {
  		require.ErrorContains(t, err, tc.want)
  	}
  }
 +
-+// The wallet knows confirmations of its published splice even when Neutrino
-+// cannot answer gettxout. Conflicted values must not wrap to a huge uint32.
-+type spliceConfirmationWallet struct {
-+	lnwallet.WalletController
-+	detail *lnwallet.TransactionDetail
-+	err    error
-+}
-+
-+func (w *spliceConfirmationWallet) GetTransactionDetails(*chainhash.Hash) (*lnwallet.TransactionDetail, error) {
-+	return w.detail, w.err
-+}
-+func TestWalletSpliceConfirmations(t *testing.T) {
-+	for _, n := range []int32{0, 1, 7, 21, -1} {
-+		w := &spliceConfirmationWallet{detail: &lnwallet.TransactionDetail{NumConfirmations: n}}
-+		expected := uint32(0)
-+		if n > 0 {
-+			expected = uint32(n)
-+		}
-+		require.Equal(t, expected, walletSpliceConfirmations(w, chainhash.Hash{}))
++func TestNotifiedSpliceConfirmations(t *testing.T) {
++	for _, tc := range []struct {
++		name  string
++		mined uint32
++		tip   int32
++		reorg bool
++		want  uint32
++	}{
++		{"historical two confirmations", 981721, 981722, false, 2},
++		{"next block", 981721, 981723, false, 3},
++		{"removed transaction", 981721, 981722, true, 0},
++		{"tip behind inclusion", 981721, 981720, false, 0},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			event := &chainntnfs.ConfirmationEvent{Confirmed: make(chan *chainntnfs.TxConfirmation, 1), NegativeConf: make(chan int32, 1)}
++			event.Confirmed <- &chainntnfs.TxConfirmation{BlockHeight: tc.mined}
++			if tc.reorg {
++				event.NegativeConf <- 1
++			}
++			require.Equal(t, tc.want, notifiedSpliceConfirmations(event, nil, func() (int32, error) { return tc.tip, nil }))
++		})
 +	}
-+	require.Zero(t, walletSpliceConfirmations(&spliceConfirmationWallet{err: errors.New("transaction unavailable")}, chainhash.Hash{}))
-+	require.Zero(t, walletSpliceConfirmations(&spliceConfirmationWallet{}, chainhash.Hash{}))
++	timeout := make(chan time.Time, 1)
++	timeout <- time.Now()
++	require.Zero(t, notifiedSpliceConfirmations(&chainntnfs.ConfirmationEvent{}, timeout, func() (int32, error) { t.Fatal("unconfirmed must not query height"); return 0, nil }))
 +}
 diff --git a/server_splice.go b/server_splice.go
 index 30e7a3015..e5a1127c9 100644

@@ -28,9 +28,17 @@ public class SpliceReadOnlyTest {
             long deadline = System.currentTimeMillis() + 90000;
             while (!node.rpcReady && System.currentTimeMillis() < deadline) Thread.sleep(500);
             while (node.walletState() != lnrpc.Stateservice.WalletState.SERVER_ACTIVE && System.currentTimeMillis() < deadline) Thread.sleep(500);
+            String expected = InstrumentationRegistry.getArguments().getString("spliceConfirmations");
             LightningOuterClass.ListChannelsResponse channels = null;
             while (System.currentTimeMillis() < deadline) {
-                try { channels = LightningOuterClass.ListChannelsResponse.parseFrom(node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance())); break; }
+                try {
+                    channels = LightningOuterClass.ListChannelsResponse.parseFrom(node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
+                    boolean matches = expected == null;
+                    for (var c : channels.getChannelsList()) if (c.getRemotePubkey().equals(peer) && c.hasPendingSplice()
+                            && c.getPendingSplice().getConfirmations() == Integer.parseInt(expected == null ? "0" : expected)) matches = true;
+                    if (matches) break;
+                    Thread.sleep(500);
+                }
                 catch (Exception e) { Thread.sleep(500); }
             }
             assertNotNull(channels);
@@ -38,6 +46,7 @@ public class SpliceReadOnlyTest {
 
                 assertTrue("Existing channel must expose its pending splice after startup", c.hasPendingSplice());
                 var p = c.getPendingSplice();
+                if (expected != null) assertEquals("Confirmations match independently checked chain", Integer.parseInt(expected), p.getConfirmations());
                 var txs = LightningOuterClass.TransactionDetails.parseFrom(node.rpc("getTransactions", LightningOuterClass.GetTransactionsRequest.getDefaultInstance()));
                 String wallet = "missing";
                 for (var tx : txs.getTransactionsList()) if (tx.getTxHash().equals(p.getTxid())) wallet = "confirmations="+tx.getNumConfirmations();
