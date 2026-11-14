@@ -94,3 +94,66 @@ Two-emulator desktop testing (2026-11-10):
   Zeus's published Android fingerprint. Release files are under .tooling/zeus.
   Both emulator windows are visible side by side on the Remmina desktop.
   Zeus is at its welcome screen; no Zeus wallet/seed or node connection created.
+
+RBF payment replacement (2026-11-14)
+------------------------------------
+Advanced > RBF/CPFP lists eligible unconfirmed outgoing on-chain payments.
+This first implementation performs RBF, not a CPFP fallback. It preserves all
+inputs, recipient outputs, sequences and locktime, and reduces only an unspent
+wallet-owned change output. It supports native P2WPKH/P2TR wallet inputs with
+known confirmed parents; max sends without change, funding/splice transactions,
+unknown inputs and insufficient change are excluded with an explanation.
+Non-signalling transactions require full-RBF relay policy. The confirmation
+shows the requested rate, total fee and added fee before signing/broadcast.
+
+Embedded LND uses WalletKit FinalizePsbt/PublishTransaction; remote CLN uses
+reserveinputs(exclusive=false), signpsbt and sendpsbt. Restricted remote runes
+must permit these methods. The replacement is revalidated before signing and
+submission is recorded before broadcast. An ambiguous response does not
+silently authorize another submission. CLN originals superseded by a known
+replacement or confirmed conflicting spend are excluded from selection.
+
+Validation: ReplacementTransactionTest and ClnRemoteContractTest (14 tests),
+plus real disposable XBT regtest LND and CLN replacement broadcasts. Both
+originals were evicted, replacements confirmed, and recipient outputs preserved.
+No mainnet funds or channels were used. Regtest harness/results are under the
+ignored .tooling/rbf-regtest directory; optional device fixtures are isolated to
+org.xbt.wallet.profiletest.
+
+Channel backup export and testing (2026-11-14)
+---------------------------------------------
+Advanced contains Test seed recovery, Create channel backup, and Test channel
+backup. Export uses Android's document picker; pending export files stay in
+private app cache and are removed on completion/cancel. Seed/hsm_secret is not
+included. Keep it separately and refresh channel backups after channel changes.
+
+Embedded exports are native LND encrypted multi-channel .backup files. The
+read-only test calls VerifyChanBackup and compares decrypted channel points
+against a fresh export. Remote CLN exports are JSON containing format/version,
+network, node_id, created_at, scb[], and a checksum. For CLN recovery tooling,
+scb[] is the array returned by staticbackup; this is not emergency.recover's
+binary format. Its test checks corruption/metadata and compares entries with
+staticbackup from the connected node. The checksum is not authentication, and
+mismatched older entries cannot be certified recoverable by this comparison.
+
+Neither test invokes restoreChannelBackups/recoverchannel, closes channels,
+or proves that peers will cooperate. Recovery import is not implemented in
+this app. CLN node backups must also preserve the matching hsm_secret.
+
+Validation: five Android file/coverage/export tests passed. A disposable XBT
+regtest channel stayed open while LND exported/verified its real backup and
+rejected a corrupted copy; CLN staticbackup entries matched across exports.
+
+App PIN lock
+------------
+Advanced -> Add a PIN code configures an app-wide 6-12 digit PIN.
+The inactivity timeout defaults to 15 minutes; separate dropdowns select
+1–60 seconds, minutes, hours, or days. Restart-only disables inactivity locking
+and greys out the timeout controls while retaining their selection. Background time counts;
+a fresh app process always starts locked. The node keeps monitoring channels.
+Change/remove requires the current PIN. Incorrect attempts are persistently
+throttled after five failures. The stored verifier uses salted PBKDF2-HMAC-SHA256
+(120,000 iterations), then an Android Keystore HMAC key; the PIN is not stored.
+This is an app access lock, not additional encryption of the node wallet.
+There is no forgotten-PIN reset: retain seed/channel backups or remote-node
+connection information. In-app seed restoration remains backlog work.

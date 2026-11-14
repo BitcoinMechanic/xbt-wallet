@@ -13,6 +13,42 @@ public class SwapSendTest {
     private void reject(JSONObject r, JSONObject q, LightningOuterClass.PayReq i) throws Exception {
         try { SwapSend.validate(r,q,i); fail("Accepted changed swap terms"); } catch (Exception expected) { }
     }
+    @Test public void dismissedUncreatedInvoiceCanBeExplicitlyReused() throws Exception {
+        JSONObject r=new JSONObject().put("dismissed",true).put("hash","a".repeat(64))
+            .put("recipient_invoice","original invoice").put("last_error","old error");
+        SwapSend.reopenUncreated(r,false);
+        assertFalse(r.has("dismissed"));assertFalse(r.has("last_error"));
+        assertEquals("original invoice",r.getString("recipient_invoice"));
+        for (boolean paid : new boolean[]{false,true}) {
+            JSONObject unsafe=new JSONObject().put("dismissed",true);
+            if (!paid) unsafe.put("reply",new JSONObject().put("id","recorded"));
+            try { SwapSend.reopenUncreated(unsafe,paid);fail("Reopened a recorded attempt"); }
+            catch (Exception expected) { assertTrue(unsafe.getBoolean("dismissed")); }
+        }
+    }
+    @Test public void cancellationOfUncreatedRequestsRequiresAuthoritativeNotFound() throws Exception {
+        JSONObject r=new JSONObject().put("last_error","No route");
+        assertTrue(SwapSend.canCancel(r,false));assertFalse(SwapSend.canCancel(r,true));
+        assertFalse(SwapSend.dismissUncreatedCancellation(r,false,"Code: wallet_send_not_found"));
+        r.put("cancel_pending",true);
+        assertFalse(SwapSend.dismissUncreatedCancellation(r,false,"Code: controller_timeout"));
+        assertFalse(SwapSend.dismissUncreatedCancellation(r,true,"Code: wallet_send_not_found"));
+        r.put("reply",new JSONObject().put("id","c".repeat(64)));
+        assertFalse(SwapSend.dismissUncreatedCancellation(r,false,"Code: wallet_send_not_found"));
+        r.remove("reply");
+        assertTrue(SwapSend.dismissUncreatedCancellation(r,false,"No request.\nCode: wallet_send_not_found"));
+        assertTrue(r.getBoolean("dismissed"));assertFalse(r.has("cancel_pending"));assertFalse(r.has("last_error"));
+        assertFalse(SwapSend.canCancel(r,false));assertEquals("Not created",SwapSend.historyState(r,""));
+        assertFalse(SwapSend.canCancel(new JSONObject().put("reply",new JSONObject().put("terminal",true).put("can_cancel",true)),false));
+        assertFalse(SwapSend.canCancel(new JSONObject().put("reply",new JSONObject().put("approved",true).put("can_cancel",false)),false));
+    }
+    @Test public void sentPaymentDoesNotClaimSwapSettlementUntilConfirmed() throws Exception {
+        JSONObject record=new JSONObject().put("reply",new JSONObject().put("state","waiting_for_payment"));
+        assertEquals("Payment sent",SwapSend.historyState(record,"Payment succeeded"));
+        assertEquals("waiting for payment",SwapSend.historyState(record,""));
+        record.getJSONObject("reply").put("state","settled").put("terminal",true);
+        assertEquals("settled",SwapSend.historyState(record,"Payment succeeded"));
+    }
     @Test public void bindsQuoteToOriginalBtcInvoiceAndXbtProvider() throws Exception {
         SwapSend.validate(record(),reply(),invoice().build());
         for (JSONObject bad : new JSONObject[]{reply().put("payment_hash","d".repeat(64)), reply().put("provider","03"+"e".repeat(64)), reply().put("environment","regtest"),reply().put("btc_msat",3000000),reply().put("xbt_msat",506000000),reply().put("expires_at",1900000601),reply().put("blocked",true),reply().put("terminal",true),reply().put("approved",false)}) reject(record(),bad,invoice().build());

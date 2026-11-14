@@ -1,0 +1,8 @@
+syntax = "proto3";
+package walletrpc;
+option java_outer_classname = "FeeBumpRpc";
+// Wire-compatible subset of the pinned LND WalletKit messages.
+message FinalizePsbtRequest { bytes funded_psbt = 1; string account = 5; }
+message FinalizePsbtResponse { bytes signed_psbt = 1; bytes raw_final_tx = 2; }
+message Transaction { bytes tx_hex = 1; string label = 2; }
+message PublishResponse { string publish_error = 1; }

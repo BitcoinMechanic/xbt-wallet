@@ -1,0 +1,2 @@
+<drawable xmlns:android="http://schemas.android.com/apk/res/android"
+    class="org.xbt.wallet.PaperBackgroundDrawable" />

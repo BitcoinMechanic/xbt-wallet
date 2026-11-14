@@ -1,0 +1,6 @@
+Tool: built-in image_gen (transparent background, reference image edit).
+Input: og-coin-updated.jpg
+Output: app/src/main/res/drawable-nodpi/header_gold_coin.png
+
+Final prompt:
+Extract ONLY the realistic physical gold Bitcoin coin on the RIGHT side of the provided image as a clean transparent-background asset for a wallet header. Preserve its original front-facing shape, gold worn metallic texture, exact Bitcoin glyph and details. Remove white background, all captions, and the left illustration entirely. One single centered coin, tightly framed square with minimal transparent margin, entire circular rim visible. Do not redesign the coin. Save output asset.

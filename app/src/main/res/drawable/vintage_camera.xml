@@ -1,0 +1,43 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="56dp" android:height="56dp"
+    android:viewportWidth="64" android:viewportHeight="64">
+    <!-- Brass fittings and a square, leather-covered folding-camera body. -->
+    <path android:fillColor="#725037" android:pathData="M12,10 L12,7 Q12,5 14,5 L22,5 Q24,5 24,7 L24,10 Z"/>
+    <path android:fillColor="#D5B778" android:pathData="M13,6 L23,6 L23,9 L13,9 Z"/>
+    <path android:strokeColor="#B7975D" android:strokeWidth="1.1"
+        android:pathData="M10,10 L54,10 Q58,10 58,15 L58,54 Q58,58 54,58 L10,58 Q6,58 6,54 L6,15 Q6,10 10,10 Z">
+        <aapt:attr name="android:fillColor"><gradient android:startX="8" android:startY="10" android:endX="57" android:endY="58" android:type="linear">
+            <item android:offset="0" android:color="#A58150"/>
+            <item android:offset="0.45" android:color="#62472F"/>
+            <item android:offset="1" android:color="#342A21"/>
+        </gradient></aapt:attr>
+    </path>
+    <path android:fillColor="#322C25" android:strokeColor="#8A704B" android:strokeWidth="0.7"
+        android:pathData="M11,26 L53,26 L53,53 Q53,54 51,54 L13,54 Q11,54 11,52 Z"/>
+    <path android:strokeColor="#B39765" android:strokeWidth="0.65" android:strokeAlpha="0.5"
+        android:pathData="M9,28 L9,51 M55,28 L55,51 M14,56 L50,56 M14,29 L16,31 M48,49 L50,51 M14,48 L17,51 M48,30 L50,32"/>
+    <!-- Optical viewfinder and engraved top plate. -->
+    <path android:fillColor="#D0AD71" android:pathData="M26,13 L39,13 Q41,13 41,15 L41,22 L24,22 L24,15 Q24,13 26,13 Z"/>
+    <path android:fillColor="#252D2B" android:pathData="M27,15 L38,15 L38,20 L27,20 Z"/>
+    <path android:strokeColor="#8CADA4" android:strokeWidth="0.8" android:pathData="M28,16 L35,16"/>
+    <path android:strokeColor="#D4B479" android:strokeWidth="1" android:pathData="M12,16 L20,16 M12,19 L20,19 M46,16 L52,16 M46,19 L52,19"/>
+    <!-- Stepped brass lens surround, dark glass, and restrained reflections. -->
+    <path android:fillColor="#201E1B" android:strokeColor="#B28B51" android:strokeWidth="1"
+        android:pathData="M48,39 A16,16 0,1 1,16 39 A16,16 0,1 1,48 39"/>
+    <path android:strokeWidth="2.4" android:fillColor="#514230" android:pathData="M45,39 A13,13 0,1 1,19 39 A13,13 0,1 1,45 39">
+        <aapt:attr name="android:strokeColor"><gradient android:startX="22" android:startY="28" android:endX="42" android:endY="50" android:type="linear">
+            <item android:offset="0" android:color="#E4CB90"/>
+            <item android:offset="0.5" android:color="#AB854B"/>
+            <item android:offset="1" android:color="#705335"/>
+        </gradient></aapt:attr>
+    </path>
+    <path android:fillColor="#192321" android:strokeColor="#998057" android:strokeWidth="0.8"
+        android:pathData="M42,39 A10,10 0,1 1,22 39 A10,10 0,1 1,42 39"/>
+    <path android:fillColor="#101918" android:pathData="M38,39 A6,6 0,1 1,26 39 A6,6 0,1 1,38 39"/>
+    <path android:strokeColor="#A1B9A5" android:strokeAlpha="0.7" android:strokeWidth="1.5" android:strokeLineCap="round"
+        android:pathData="M25,37 Q26,32 31,32"/>
+    <path android:strokeColor="#C6A36C" android:strokeAlpha="0.5" android:strokeWidth="0.8" android:strokeLineCap="round"
+        android:pathData="M35,46 Q39,44 39,41"/>
+    <path android:fillColor="#CFAD76" android:pathData="M13,24 A1,1 0,1 1,11 24 A1,1 0,1 1,13 24 M53,24 A1,1 0,1 1,51 24 A1,1 0,1 1,53 24"/>
+</vector>

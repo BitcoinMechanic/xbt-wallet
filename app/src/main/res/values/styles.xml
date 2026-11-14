@@ -1,19 +1,22 @@
 <resources>
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:popupMenuStyle">@style/WalletPopupMenu</item>
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:colorAccent">#A8EFD5</item>
-        <item name="android:colorControlActivated">#A8EFD5</item>
-        <item name="android:textColorPrimary">#EEF5F0</item>
-        <item name="android:textColorSecondary">#AFBEB6</item>
+        <item name="android:fontFamily">sans-serif-light</item>
+        <item name="android:colorAccent">#D6B47B</item>
+        <item name="android:colorControlActivated">#D6B47B</item>
+        <item name="android:textColorPrimary">#F2E6CE</item>
+        <item name="android:textColorSecondary">#C2B69F</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#101517</item>
-        <item name="android:navigationBarColor">#101517</item>
-        <item name="android:windowBackground">#101517</item>
-        <item name="android:colorBackground">#101517</item>
+        <item name="android:statusBarColor">#12120F</item>
+        <item name="android:navigationBarColor">#12120F</item>
+        <item name="android:windowBackground">@drawable/wallet_paper_background</item>
+        <item name="android:colorBackground">#12120F</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
     <style name="WalletPopupMenu" parent="android:style/Widget.Material.PopupMenu">
         <item name="android:popupBackground">@drawable/wallet_popup_background</item>
+    </style>
+    <style name="WalletDotsMenuTheme" parent="AppTheme">
+        <item name="android:listPreferredItemHeightSmall">66dp</item>
     </style>
 </resources>

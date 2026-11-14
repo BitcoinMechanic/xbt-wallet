@@ -16,6 +16,21 @@ public class SwapControllersTest {
             .put("endpoints", new JSONArray().put("https://example.com"))
             .put("pairs", new JSONArray().put("XBT/BTC"));
     }
+    @Test public void routingDiagnosticsDistinguishUnknownEntryFromProvenLimit() throws Exception {
+        JSONObject diagnostic=new JSONObject().put("node","btc-cln-v1").put("route_hint_count",1)
+            .put("route_hint_entry_unknown",1).put("max_fee_msat",10000).put("max_hops",4)
+            .put("max_delay_blocks",576).put("rune","SECRET");
+        for (String code : new String[]{"route_hint_entry_unknown","route_hint_fee_limit","bounded_route_unavailable"}) {
+            try { SwapControllers.walletResponse(new JSONObject().put("error",code).put("diagnostic",diagnostic));fail(); }
+            catch(Exception e) {
+                String message=e.getMessage();assertTrue(message.contains("Code: "+code));
+                assertTrue(message.contains("max_fee_msat: 10000"));assertFalse(message.contains("SECRET"));
+                if(code.equals("route_hint_entry_unknown"))assertTrue(message.contains("entry nodes are unknown"));
+                if(code.equals("route_hint_fee_limit"))assertTrue(message.contains("requires more forwarding fees"));
+                if(code.equals("bounded_route_unavailable"))assertTrue(message.contains("does not identify"));
+            }
+        }
+    }
     @Test public void validatesNetworkProtocolAndAddresses() throws Exception {
         assertEquals("Example", new SwapControllers.Provider(info(), "mainnet").name);
         for (JSONObject bad : new JSONObject[]{info().put("environment","regtest"), info().put("format","other"),

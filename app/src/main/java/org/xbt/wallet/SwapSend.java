@@ -6,6 +6,31 @@ import lnrpc.LightningOuterClass;
 
 /** Bind a swap quote and its payable XBT invoice to the exact original BTC recipient. */
 final class SwapSend {
+    static void reopenUncreated(JSONObject record, boolean paymentAttempted) throws Exception {
+        if (!record.optBoolean("dismissed")) return;
+        if (paymentAttempted || record.optJSONObject("reply")!=null)
+            throw new Exception("This invoice has a recorded swap or payment attempt. Check its status before retrying.");
+        record.remove("dismissed"); record.remove("cancel_pending"); record.remove("last_error");
+    }
+    static boolean canCancel(JSONObject record, boolean paymentAttempted) {
+        JSONObject reply=record.optJSONObject("reply");
+        return !paymentAttempted && !record.optBoolean("dismissed")
+            && (reply==null || (!reply.optBoolean("terminal")
+                && (record.optBoolean("cancel_pending") || reply.optBoolean("can_cancel",!reply.optBoolean("approved")))));
+    }
+    static boolean dismissUncreatedCancellation(JSONObject record, boolean paymentAttempted, String error) throws Exception {
+        if (paymentAttempted || !record.optBoolean("cancel_pending") || record.optJSONObject("reply")!=null
+            || error==null || !error.contains("Code: wallet_send_not_found")) return false;
+        record.put("dismissed",true);record.remove("cancel_pending");record.remove("last_error");return true;
+    }
+    static String historyState(JSONObject record, String paymentStatus) {
+        if (record.optBoolean("dismissed")) return "Not created";
+        JSONObject reply=record.optJSONObject("reply");
+        if (reply!=null && reply.optBoolean("terminal")) return reply.optString("state").replace('_',' ');
+        if ("Payment succeeded".equals(paymentStatus)) return "Payment sent";
+        if (record.optBoolean("cancel_pending") || (reply!=null && reply.optBoolean("cancel_requested"))) return "Cancelling…";
+        return reply==null ? "Request pending" : reply.optString("state").replace('_',' ');
+    }
     static long integer(JSONObject object, String key) throws Exception {
         Object raw = object.get(key);
         if (!(raw instanceof Number)) throw new Exception("Invalid numeric swap term: " + key);
@@ -35,6 +60,8 @@ final class SwapSend {
                 if (!oldFees.get(key).toString().equals(fees.get(key).toString())) throw new Exception("Controller changed the saved swap fee breakdown.");
         }
         if (reply.has("invoice")) {
+            if (reply.optBoolean("cancel_requested") || "cancelling".equals(reply.optString("state")) || "cancelled".equals(reply.optString("state")))
+                throw new Exception("Controller returned a payment invoice for a cancelled swap. Payment blocked.");
             if (invoice == null || !reply.getBoolean("approved") || reply.getBoolean("blocked") || reply.getBoolean("terminal")
                 || !invoice.getPaymentHash().equals(record.getString("hash")) || invoice.getNumMsat() != xbt
                 || !(invoice.containsFeatures(512) || invoice.containsFeatures(513))

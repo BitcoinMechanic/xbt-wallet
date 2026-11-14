@@ -44,9 +44,16 @@ public final class MainActivity extends Activity {
         getSystemService(android.view.inputmethod.InputMethodManager.class)
             .hideSoftInputFromWindow(focused.getWindowToken(), 0);
     }
+    private boolean touchInProgress;
     @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
+        if (WalletPin.locked(this)) { checkPinLock(); return true; }
+        if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN) touchInProgress = true;
         clearFieldFocusOutside(getWindow(), event);
-        return super.dispatchTouchEvent(event);
+        try { return super.dispatchTouchEvent(event); }
+        finally {
+            if (event.getActionMasked() == android.view.MotionEvent.ACTION_UP
+                    || event.getActionMasked() == android.view.MotionEvent.ACTION_CANCEL) touchInProgress = false;
+        }
     }
     private final class WalletDialogBuilder extends AlertDialog.Builder {
         WalletDialogBuilder() { super(MainActivity.this); }
@@ -63,6 +70,8 @@ public final class MainActivity extends Activity {
                 content.removeView(body);
                 FrameLayout wrapper = new FrameLayout(MainActivity.this) {
                     @Override public boolean dispatchTouchEvent(android.view.MotionEvent event) {
+                        if (WalletPin.locked(MainActivity.this)) { checkPinLock(); return true; }
+                        WalletPin.touch(MainActivity.this);
                         clearFieldFocusOutside(window, event);
                         return super.dispatchTouchEvent(event);
                     }
@@ -74,16 +83,16 @@ public final class MainActivity extends Activity {
         }
     }
     private void styleWalletDialog(AlertDialog dialog) {
-        dialog.getWindow().setBackgroundDrawable(surface(0xff101517, 18, 0xff304037));
+        dialog.getWindow().setBackgroundDrawable(surface(0xff12120f, 18, 0xff69563d));
         TextView message = dialog.findViewById(android.R.id.message);
         if (message != null) {
-            message.setTextColor(0xffafbeb6); message.setTextSize(15); message.setLineSpacing(dp(3), 1f);
+            message.setTextColor(0xffc2b69f); message.setTextSize(15); message.setLineSpacing(dp(3), 1f);
         }
         int titleId = getResources().getIdentifier("alertTitle", "id", "android");
         TextView title = titleId == 0 ? null : dialog.findViewById(titleId);
         if (title != null) {
-            title.setTextColor(0xffeef5f0); title.setTextSize(20);
-            title.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+            title.setTextColor(0xfff2e6ce); title.setTextSize(20);
+            title.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.BOLD);
         }
         // Replace the platform button bar with the same equally sized actions as custom forms.
         List<Button> buttons = new ArrayList<>();
@@ -111,8 +120,8 @@ public final class MainActivity extends Activity {
         }
         ListView list = dialog.getListView();
         if (list != null) {
-            list.setBackgroundColor(0xff101517);
-            list.setDivider(new android.graphics.drawable.ColorDrawable(0xff304037));
+            list.setBackground(new PaperBackgroundDrawable());
+            list.setDivider(new android.graphics.drawable.ColorDrawable(0xff69563d));
             list.setDividerHeight(dp(1));
             list.setPadding(dp(8), 0, dp(8), dp(8));
         }
@@ -137,11 +146,18 @@ public final class MainActivity extends Activity {
             case "Swap controllers": return this::swapControllers;
             case "Search controllers": return this::controllerSearch;
             case "Advanced": return this::advanced;
+            case "PIN code": return this::pinSettings;
+            case "Backup/Recover": return this::backupRecover;
+            case "Customization": return this::customization;
+            case "Fiat price source": return this::fiatPriceSource;
+            case "RBF/CPFP": return this::feeBumps;
             case "Node connection": return this::nodeConnection;
             case "Closed-channel history": return this::closedChannels;
             case "Payment history": return this::paymentHistory;
             case "Before you view your seed": return this::backup;
-            case "Test recovery": return this::testRecovery;
+            case "Test seed recovery": return this::testRecovery;
+            case "Create channel backup": return this::createChannelBackup;
+            case "Test channel backup": return this::testChannelBackup;
             case "Receive XBT": return this::deposit;
             case "Open Channel": return this::coins;
             case "Send on chain": return this::sendOnChain;
@@ -166,6 +182,7 @@ public final class MainActivity extends Activity {
         currentNavigation = new NavigationEntry(title, restore);
     }
     @Override public void onBackPressed() {
+        if (WalletPin.locked(this)) { checkPinLock(); return; }
         if (walletPopup != null) { walletPopup.dismiss(); return; }
         if (!busy && WalletProfiles.isDraft(this, profile)) { cancelWalletSetup(); return; }
         if (screen.equals("Home")) { super.onBackPressed(); return; }
@@ -181,6 +198,7 @@ public final class MainActivity extends Activity {
     private LinearLayout page;
     private FrameLayout pageHeader;
     private ImageView headerBrand;
+    private FrameLayout headerRateViewport;
     private TextView headerRate;
     private float headerSlide;
     private android.animation.ValueAnimator headerSlideAnimation;
@@ -189,7 +207,7 @@ public final class MainActivity extends Activity {
     private View walletMenuAnchor;
     private PopupMenu walletPopup;
     private NodeService node;
-    private boolean bound, busy;
+    private boolean bound, busy, refreshingHome;
     private String profile;
     private String screen = "";
     private android.animation.ValueAnimator onboardingReveal;
@@ -212,10 +230,18 @@ public final class MainActivity extends Activity {
     private TextView unconfirmedBalanceText;
     private long unconfirmedBalanceSats;
     private boolean ratesLoading;
+    private long ratesGeneration;
     private long lastRatesAttempt;
     private org.json.JSONObject fiatRates;
     private AmountEntry activeAmountEntry;
     private ByteString receivingInvoiceHash;
+    private ScrollView pageScroll;
+    private OnboardingTitleView pageTitle;
+    private String displayedSwapReceive;
+    private TextView swapReceiveAmountText;
+    private long swapReceiveAmountSats;
+    private TextView receivedAmountText;
+    private long receivedAmountSats;
     private EditText scanTarget;
     private boolean scanPayment;
     private String receivingAddress;
@@ -237,26 +263,58 @@ public final class MainActivity extends Activity {
                 try {
                     org.json.JSONObject r = new org.json.JSONObject(prefs.getString("swap-send-" + viewingSendHash, "{}"));
                     org.json.JSONObject reply = r.optJSONObject("reply");
-                    if (!r.has("last_error") && reply != null && reply.optBoolean("approved") && !reply.optBoolean("terminal") && !reply.has("invoice"))
+                    if (!r.has("last_error") && reply != null && reply.optBoolean("approved") && !reply.optBoolean("terminal") && (!reply.has("invoice") || prefs.contains("payment-" + viewingSendHash) || r.optBoolean("cancel_pending") || reply.optBoolean("cancel_requested")))
                         updateSwapSend(viewingSendHash, "status");
                 } catch (Exception ignored) { }
             }
             handler.postDelayed(this, 5000);
         }
     };
-    @Override protected void onResume() { super.onResume(); handler.postDelayed(poll, 5000); }
-    @Override protected void onPause() { handler.removeCallbacks(poll); super.onPause(); }
+    private boolean pinOpening, pinResumed;
+    private final Runnable pinTimer = () -> checkPinLock();
+    private void checkPinLock() {
+        handler.removeCallbacks(pinTimer);
+        if (!pinResumed) return;
+        if (WalletPin.locked(this)) {
+            getWindow().getDecorView().setAlpha(0f);
+            if (!pinOpening) {
+                pinOpening=true;
+                startActivityForResult(new Intent(this,PinLockActivity.class),6050);
+            }
+        } else {
+            getWindow().getDecorView().setAlpha(1f);
+            if(WalletPin.enabled(this) && !WalletPin.restartOnly(this))handler.postDelayed(pinTimer,1000);
+        }
+    }
+    @Override public void onUserInteraction() {
+        super.onUserInteraction(); WalletPin.touch(this); checkPinLock();
+    }
+    @Override protected void onResume() {
+        super.onResume(); pinResumed=true; checkPinLock(); handler.postDelayed(poll, 5000);
+    }
+    @Override protected void onPause() { pinResumed=false; handler.removeCallbacks(pinTimer); if(WalletPin.enabled(this))getWindow().getDecorView().setAlpha(0f); touchInProgress = false; handler.removeCallbacks(poll); super.onPause(); }
     private interface Job { void run() throws Exception; }
     private final ServiceConnection connection = new ServiceConnection() {
         public void onServiceConnected(ComponentName name, IBinder binder) { node = ((NodeService.LocalBinder) binder).service(); home(); }
         public void onServiceDisconnected(ComponentName name) { node = null; }
     };
+    private WalletOpeningView launchWallet;
+
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         profile = WalletProfiles.active(this);
         prefs = WalletProfiles.settings(this, profile);
+        if (state != null) {
+            pendingBackupName = state.getString("pending-backup-name");
+            backupOperationProfile = state.getString("backup-operation-profile");
+        }
         if (WalletProfiles.hasPendingDeletion(this)) { resumeWalletRemoval(); return; }
+        if (state == null) launchWallet = new WalletOpeningView(this, () -> {
+            WalletOpeningView cover = launchWallet; launchWallet = null;
+            if (cover != null && cover.getParent() instanceof android.view.ViewGroup)
+                ((android.view.ViewGroup) cover.getParent()).removeView(cover);
+        });
         openSelectedWallet();
     }
     private void openSelectedWallet() {
@@ -283,6 +341,7 @@ public final class MainActivity extends Activity {
         recordNavigation(title, restore);
         if (onboardingReveal != null) { onboardingReveal.cancel(); onboardingReveal = null; }
         activeAmountEntry = null;
+        pageTitle = null; receivedAmountText = null; swapReceiveAmountText = null;
         unconfirmedBalanceText = null;
         for (android.animation.ValueAnimator animation : new ArrayList<>(channelExpansions.values())) animation.cancel();
         channelExpansions.clear(); homeChannelBalances.clear();
@@ -293,11 +352,14 @@ public final class MainActivity extends Activity {
         else getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         if (walletPopup != null) walletPopup.dismiss();
         walletMenuAnchor = null;
+        updateUtxoAmounts = null;
+        updateChannelDetailAmounts = null;
+        detailChannelPoint = null;
         viewingSpliceChannel = null; viewingSpliceTxid = null; spliceDetailsText = null; spliceRefreshError = null;
         screen = title;
-        ScrollView scroll = new ScrollView(this); page = new LinearLayout(this);
+        ScrollView scroll = new ScrollView(this); pageScroll = scroll; page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL); page.setPadding(dp(20), dp(24), dp(20), dp(32));
-        scroll.setBackgroundColor(0xff101517); scroll.setFillViewport(true);
+        scroll.setBackground(new PaperBackgroundDrawable()); scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
         scroll.setOnApplyWindowInsetsListener((v, insets) -> {
             v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
@@ -311,55 +373,80 @@ public final class MainActivity extends Activity {
             setupContainer.addView(page, new LinearLayout.LayoutParams(-1, -2));
             scroll.addView(setupContainer);
         } else scroll.addView(page);
-        setContentView(scroll);
+        if (launchWallet != null) {
+            if (launchWallet.getParent() instanceof android.view.ViewGroup)
+                ((android.view.ViewGroup) launchWallet.getParent()).removeView(launchWallet);
+            FrameLayout stage = new FrameLayout(this);
+            stage.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+            stage.addView(launchWallet, new FrameLayout.LayoutParams(-1, -1));
+            setContentView(stage);
+        } else setContentView(scroll);
         if (headerSlideAnimation != null) headerSlideAnimation.cancel();
         headerSlideAnimation = null;
         headerSlide = prefs.getBoolean("header-fiat-rate", false) ? 1f : 0f;
         FrameLayout header = new FrameLayout(this); pageHeader = header;
         ImageView brand = new ImageView(this) {
+            private final android.graphics.Paint lettering = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            private Bitmap coin;
+            private final android.graphics.Paint coinPaint = new android.graphics.Paint(
+                android.graphics.Paint.ANTI_ALIAS_FLAG | android.graphics.Paint.FILTER_BITMAP_FLAG | android.graphics.Paint.DITHER_FLAG);
+            @Override protected void onSizeChanged(int w,int h,int oldw,int oldh) {
+                super.onSizeChanged(w,h,oldw,oldh);
+                if(w>0)coin=HeaderCoinBitmap.atSize(getResources(),Math.round(w*84f/282f));
+            }
             @Override protected void onDraw(android.graphics.Canvas canvas) {
-                // Draw fixed rope flourishes, then slide only the central lettering.
-                android.graphics.drawable.Drawable logo = getDrawable();
-                if (logo == null) return;
-                float scale = Math.min((float) getWidth() / logo.getIntrinsicWidth(), (float) getHeight() / logo.getIntrinsicHeight());
-                float w = logo.getIntrinsicWidth() * scale, h = logo.getIntrinsicHeight() * scale;
-                float x = (getWidth() - w) / 2, y = (getHeight() - h) / 2;
-                android.graphics.Path wings = new android.graphics.Path();
-                for (int side = 0; side < 2; side++) {
-                    float[][] outline = {{0,.38f},{.25f,.38f},{.33f,.56f},{.25f,.72f},{0,.72f}};
-                    for (int i = 0; i < outline.length; i++) {
-                        float px = x + (side == 0 ? outline[i][0] : 1 - outline[i][0]) * w;
-                        float py = y + outline[i][1] * h;
-                        if (i == 0) wings.moveTo(px, py); else wings.lineTo(px, py);
-                    }
-                    wings.close();
-                }
-                int saved = canvas.save(); canvas.clipPath(wings);
-                super.onDraw(canvas); canvas.restoreToCount(saved);
-                saved = canvas.save();
-                canvas.clipRect(x + .26f * w, y, x + .74f * w, y + h);
-                canvas.clipOutPath(wings);
-                canvas.translate(-headerSlide * dp(126.5f), 0);
-                // Also clip the source after translating, so the opposite flourish
-                // cannot slide into the center along with the lettering.
-                canvas.clipRect(x + .26f * w, y, x + .74f * w, y + h);
-                canvas.clipOutPath(wings);
-                super.onDraw(canvas); canvas.restoreToCount(saved);
+                float unit = getWidth() / 282f;
+                float middle = getHeight() / 2f;
+                boolean showCoin=prefs.getBoolean("header-show-coin",true);
+                float textLeft=(showCoin ? 94 : 47)*unit;
+                if(showCoin && coin!=null)canvas.drawBitmap(coin,0,Math.round(middle-coin.getHeight()/2f),coinPaint);
+                lettering.setTypeface(android.graphics.Typeface.create("serif", android.graphics.Typeface.BOLD));
+                lettering.setTextSize(80*unit);
+                float available=184*unit;
+                if(lettering.measureText("XBT")>available)
+                    lettering.setTextSize(lettering.getTextSize()*available/lettering.measureText("XBT"));
+                lettering.setShader(new android.graphics.LinearGradient(0,middle-32*unit,0,middle+32*unit,
+                    new int[]{0xfff3e2bc,0xffe4cfa4,0xffbda179},null,android.graphics.Shader.TileMode.CLAMP));
+                android.graphics.Rect ink=new android.graphics.Rect();
+                lettering.getTextBounds("XBT",0,3,ink);
+                int saved=canvas.save();
+                canvas.clipRect(textLeft,0,textLeft+188*unit,getHeight());
+                canvas.translate(-headerSlide*188*unit,0);
+                float x=textLeft+(188*unit-lettering.measureText("XBT"))/2;
+                canvas.drawText("XBT",x,middle-(ink.top+ink.bottom)/2f,lettering);
+                canvas.restoreToCount(saved);
             }
         }; headerBrand = brand;
-        brand.setImageResource(org.xbt.wallet.R.drawable.xbt_logo);
         brand.setContentDescription("XBT. Tap to show the fiat exchange rate.");
-        brand.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        header.addView(brand, new FrameLayout.LayoutParams(dp(253), dp(91.08f), Gravity.CENTER));
-        headerRate = new TextView(this);
-        headerRate.setGravity(Gravity.CENTER); headerRate.setTextSize(20);
+        header.addView(brand, new FrameLayout.LayoutParams(dp(282), dp(104), Gravity.CENTER));
+        headerRate = new TextView(this) {
+            private float gradientTextSize;
+            private int gradientWidth;
+            @Override protected void onDraw(android.graphics.Canvas canvas) {
+                if (gradientTextSize != getTextSize() || gradientWidth != getWidth()) {
+                    gradientTextSize = getTextSize(); gradientWidth = getWidth();
+                    getPaint().setShader(new android.graphics.LinearGradient(
+                        0, 0, Math.max(1, getWidth()), Math.max(1, getTextSize()),
+                        new int[]{0xffd3ad6b, 0xffdfbb7b, 0xffd4ac69, 0xffc39556},
+                        new float[]{0f, .3f, .55f, 1f}, android.graphics.Shader.TileMode.CLAMP));
+                }
+                super.onDraw(canvas);
+            }
+        };
+        headerRate.setTypeface(android.graphics.Typeface.create("serif", android.graphics.Typeface.BOLD));
+        headerRate.setGravity(Gravity.CENTER); headerRate.setTextSize(20 * 1.35f * 1.20f * 1.25f * 1.10f);
         headerRate.setTextColor(0xffe8d2a7);
         headerRate.setMaxLines(3);
-        headerRate.setAutoSizeTextTypeUniformWithConfiguration(8, 16, 1, android.util.TypedValue.COMPLEX_UNIT_SP);
-        FrameLayout rateViewport = new FrameLayout(this);
+        int[] fiatPriceSizes = new int[9];
+        for (int i = 0; i < fiatPriceSizes.length; i++)
+            fiatPriceSizes[i] = Math.round(android.util.TypedValue.applyDimension(
+                android.util.TypedValue.COMPLEX_UNIT_SP, (8 + i) * 1.35f * 1.20f * 1.25f * 1.10f, getResources().getDisplayMetrics()));
+        headerRate.setAutoSizeTextTypeUniformWithPresetSizes(fiatPriceSizes, android.util.TypedValue.COMPLEX_UNIT_PX);
+        FrameLayout rateViewport = new FrameLayout(this); headerRateViewport=rateViewport;
         rateViewport.setClipChildren(true);
         rateViewport.addView(headerRate, new FrameLayout.LayoutParams(-1, -1));
-        header.addView(rateViewport, new FrameLayout.LayoutParams(dp(88.55f), dp(91.08f), Gravity.CENTER));
+        header.addView(rateViewport, new FrameLayout.LayoutParams(dp(188), dp(104), Gravity.CENTER));
+        rateViewport.setTranslationX(prefs.getBoolean("header-show-coin",true) ? dp(47) : 0);
         View.OnClickListener toggleRate = v -> {
             prefs.edit().putBoolean("header-fiat-rate", !prefs.getBoolean("header-fiat-rate", false)).apply();
             if (headerSlideAnimation != null) headerSlideAnimation.cancel();
@@ -391,7 +478,7 @@ public final class MainActivity extends Activity {
         if (!prefs.getString("fiat-currency", "USD").equals("Off")) fetchFiatRates();
         if (title.equals("Home")) {
             Button menu = new Button(this); styleButton(menu, false);
-            menu.setText("⋮"); menu.setTextSize(36f); menu.setPadding(0, 0, 0, 0);
+            menu.setText("⋮"); menu.setTextSize(36f * 1.15f); menu.setPadding(0, 0, 0, 0);
             menu.setBackground(null);
             menu.setContentDescription("Wallet menu");
             FrameLayout.LayoutParams menuSize = new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.END | Gravity.CENTER_VERTICAL);
@@ -400,23 +487,14 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams headerSize = new LinearLayout.LayoutParams(-1, -2); headerSize.bottomMargin = dp(24);
         page.addView(header, headerSize);
         if (!title.equals("Home")) {
-            boolean onboarding = title.equals("Your Lightning Wallet") || title.equals("Create your wallet")
-                || title.equals("Name your wallet") || title.equals("Wallet created") || title.equals("Starting...") || title.equals("Wallets")
-                || title.equals("Payment history") || title.equals("On chain funds") || title.equals("Channels")
-                || title.equals("Swap controllers") || title.equals("Advanced") || title.equals("Receive Lightning")
-                || title.equals("Create BOLT12") || title.equals("BOLT12 offers") || title.equals("BOLT12 offer");
-            TextView heading;
-            if (onboarding) {
-                heading = new OnboardingTitleView(this); heading.setText(title);
-                heading.setLineSpacing(dp(3), 1f);
-                page.addView(heading, new LinearLayout.LayoutParams(-1, -2));
-            } else {
-                heading = text(title); heading.setTextColor(0xfff3f7f5);
-            }
+            OnboardingTitleView heading = new OnboardingTitleView(this); pageTitle = heading;
+            heading.setText(pageTitleCase(title));
+            heading.setLineSpacing(dp(3), 1f);
+            page.addView(heading, new LinearLayout.LayoutParams(-1, -2));
             heading.setTextSize(28);
-            heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+            heading.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
             heading.setPadding(0, 0, 0, dp(20));
-            if (onboarding) revealOnboardingTitle((OnboardingTitleView) heading);
+            revealOnboardingTitle(heading);
         }
         if (setupContainer != null) {
             Button cancel = button("Cancel setup", this::cancelWalletSetup);
@@ -425,6 +503,18 @@ public final class MainActivity extends Activity {
             footer.setMargins(dp(20), dp(5), dp(20), dp(32));
             setupContainer.addView(cancel, footer);
         }
+    }
+    private static String pageTitleCase(String title) {
+        StringBuilder result = new StringBuilder(title.length());
+        boolean wordStart = true;
+        for (int offset = 0; offset < title.length();) {
+            int ch = title.codePointAt(offset);
+            result.appendCodePoint(wordStart ? Character.toTitleCase(ch) : ch);
+            if (Character.isLetterOrDigit(ch)) wordStart = false;
+            else if (Character.isWhitespace(ch) || ch == '/' || ch == '-') wordStart = true;
+            offset += Character.charCount(ch);
+        }
+        return result.toString();
     }
     private void revealOnboardingTitle(OnboardingTitleView heading) {
         if (!android.animation.ValueAnimator.areAnimatorsEnabled()) return;
@@ -447,43 +537,39 @@ public final class MainActivity extends Activity {
         java.math.BigDecimal price = amountPrice();
         String value;
         if (currency.equals("Off")) value = "Fiat display is off";
-        else if (price == null) value = "1 XBT\n" + currency + " rate unavailable";
+        else if (price == null) value = currency + " rate unavailable";
         else {
             java.text.NumberFormat format = java.text.NumberFormat.getCurrencyInstance(Locale.US);
             format.setCurrency(java.util.Currency.getInstance(currency));
-            int decimals = Math.max(0, java.util.Currency.getInstance(currency).getDefaultFractionDigits());
-            format.setMinimumFractionDigits(decimals); format.setMaximumFractionDigits(decimals);
-            value = format.format(price) + "\n/XBT";
+            format.setMinimumFractionDigits(0); format.setMaximumFractionDigits(0);
+            value = format.format(price);
         }
         if (!value.contentEquals(headerRate.getText())) headerRate.setText(value);
         headerRate.setContentDescription(value + ". Tap to show the XBT logo.");
     }
     private void positionHeaderRate() {
         headerBrand.invalidate();
-        headerRate.setTranslationX((1f - headerSlide) * dp(126.5f));
+        headerRate.setTranslationX((1f - headerSlide) * dp(188));
         // Keep it laid out from the first frame; the viewport clips it completely at slide=0.
         headerRate.setImportantForAccessibility(headerSlide == 0 ? View.IMPORTANT_FOR_ACCESSIBILITY_NO : View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         headerBrand.setContentDescription(headerSlide >= .5f
             ? "Tap to show the XBT logo." : "XBT. Tap to show the fiat exchange rate.");
     }
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
-    private android.graphics.drawable.GradientDrawable surface(int color, int radius, int border) {
-        android.graphics.drawable.GradientDrawable shape = new android.graphics.drawable.GradientDrawable();
-        shape.setColor(color); shape.setCornerRadius(dp(radius));
-        if (border != 0) shape.setStroke(dp(1), border);
-        return shape;
+    private android.graphics.drawable.Drawable surface(int color, int radius, int border) {
+        return new PaperDrawable(color, radius, border, false);
     }
     private void styleButton(Button button, boolean accent) {
         button.setAllCaps(false); button.setTextSize(15);
-        button.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        button.setTypeface(android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL));
         button.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
-            new int[]{0xff65716c, accent ? 0xff101b16 : 0xffe5eee9}));
+            new int[]{0xff8c8270, accent ? 0xfff5e7ce : 0xffedddbc}));
         button.setMinHeight(dp(52)); button.setMinimumHeight(dp(52)); button.setMinWidth(0); button.setMinimumWidth(0);
         button.setPadding(dp(14), dp(12), dp(14), dp(12)); button.setStateListAnimator(null);
         android.graphics.drawable.StateListDrawable states = new android.graphics.drawable.StateListDrawable();
-        states.addState(new int[]{-android.R.attr.state_enabled}, surface(0xff19201d, 14, 0xff252f2a));
-        states.addState(new int[]{}, surface(accent ? 0xffa8efd5 : 0xff1d2723, 14, accent ? 0 : 0xff304037));
-        button.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x336de8b1), states, null));
+        states.addState(new int[]{-android.R.attr.state_enabled}, surface(0xff211e18, 14, 0xff40382b));
+        states.addState(new int[]{}, surface(accent ? 0xff70441f : 0xff30271e, 14, accent ? 0xffba8245 : 0xff81694b));
+        button.setBackground(new android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(0x33e1b879), states, null));
     }
     private void styleDestructiveButton(Button button) {
         styleButton(button, false);
@@ -504,7 +590,7 @@ public final class MainActivity extends Activity {
             float progress = (float) i / steps;
             float softened = progress * progress * (3 - 2 * progress);
             int[] colors = new int[rope.length];
-            for (int j = 0; j < rope.length; j++) colors[j] = (Integer) blend.evaluate(softened, 0xff101517, rope[j]);
+            for (int j = 0; j < rope.length; j++) colors[j] = (Integer) blend.evaluate(softened, 0xff12120f, rope[j]);
             android.graphics.drawable.GradientDrawable layer = new android.graphics.drawable.GradientDrawable(
                 android.graphics.drawable.GradientDrawable.Orientation.TL_BR, colors);
             layer.setCornerRadius(Math.max(0, dp(14) - i));
@@ -523,7 +609,7 @@ public final class MainActivity extends Activity {
     }
     private TextView text(String value) {
         TextView view = new TextView(this); view.setText(value); view.setTextSize(15);
-        view.setTextColor(0xffafbeb6); view.setLineSpacing(dp(3), 1f);
+        view.setTextColor(0xffc2b69f); view.setLineSpacing(dp(3), 1f);
         view.setPadding(0, dp(8), 0, dp(12)); page.addView(view); return view;
     }
     private Button button(String label, Runnable action) {
@@ -531,9 +617,13 @@ public final class MainActivity extends Activity {
         boolean accent = label.startsWith("Review") || label.startsWith("Create") || label.equals("Send") || label.equals("Save") || label.equals("Check backup");
         styleButton(b, accent);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.topMargin = dp(5); params.bottomMargin = dp(5);
-        page.addView(b, params); b.setOnClickListener(v -> { if (!busy) {
+        page.addView(b, params); b.setOnClickListener(v -> {
+            if (busy) { showOperationInProgress(); return; }
             if (label.equals("Back") || label.startsWith("Back to ")) onBackPressed(); else action.run();
-        } }); return b;
+        }); return b;
+    }
+    private void showOperationInProgress() {
+        Toast.makeText(this, "Please wait for the current operation to finish", Toast.LENGTH_SHORT).show();
     }
     private void setFieldHint(EditText field, String hint) {
         android.text.SpannableString styled = new android.text.SpannableString(hint);
@@ -548,12 +638,12 @@ public final class MainActivity extends Activity {
     }
     private EditText field(LinearLayout container, String hint, String value) {
         EditText e = new EditText(this); setFieldHint(e, hint); e.setText(value); e.setSingleLine(true); e.setTextSize(16);
-        e.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}}, new int[]{0xff6c7c73,0xffeef5f0}));
-        e.setHintTextColor(0xff8d9f94); e.setPadding(dp(14), dp(14), dp(14), dp(14)); e.setMinimumHeight(dp(54));
+        e.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled},new int[]{}}, new int[]{0xff958a75,0xfff2e6ce}));
+        e.setHintTextColor(0xffa89b82); e.setPadding(dp(14), dp(14), dp(14), dp(14)); e.setMinimumHeight(dp(54));
         android.graphics.drawable.StateListDrawable background = new android.graphics.drawable.StateListDrawable();
-        background.addState(new int[]{-android.R.attr.state_enabled}, surface(0xff151d18, 12, 0xff202e25));
-        background.addState(new int[]{android.R.attr.state_focused}, surface(0xff19251e, 12, 0xffa8efd5));
-        background.addState(new int[]{}, surface(0xff151e19, 12, 0xff35453b)); e.setBackground(background);
+        background.addState(new int[]{-android.R.attr.state_enabled}, surface(0xff191813, 12, 0xff393327));
+        background.addState(new int[]{android.R.attr.state_focused}, surface(0xff282219, 12, 0xffd6b47b));
+        background.addState(new int[]{}, surface(0xff1e1b15, 12, 0xff625039)); e.setBackground(background);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2); params.topMargin = dp(4); params.bottomMargin = dp(10);
         container.addView(e, params); return e;
     }
@@ -600,12 +690,12 @@ public final class MainActivity extends Activity {
     private void confirmAction(String title, String message, String action, Runnable confirmed) {
         LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(20), dp(20), dp(20), dp(20));
-        TextView heading = new TextView(this); heading.setText(title); heading.setTextSize(20);
-        heading.setTextColor(0xffeef5f0); heading.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        TextView heading = new TextView(this); heading.setText(pageTitleCase(title)); heading.setTextSize(20);
+        heading.setTextColor(0xfff2e6ce); heading.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.BOLD);
         heading.setPadding(0, 0, 0, dp(16)); form.addView(heading);
         ScrollView scroll = new ScrollView(this);
         TextView details = new TextView(this); details.setText(message); details.setTextSize(15);
-        details.setTextColor(0xffafbeb6); details.setLineSpacing(dp(3), 1f);
+        details.setTextColor(0xffc2b69f); details.setLineSpacing(dp(3), 1f);
         details.setPadding(0, 0, 0, dp(16)); scroll.addView(details);
         form.addView(scroll, new LinearLayout.LayoutParams(-1, -2, 1));
         LinearLayout actions = new LinearLayout(this); actions.setBaselineAligned(false);
@@ -619,14 +709,48 @@ public final class MainActivity extends Activity {
         cancel.setOnClickListener(v -> dialog.dismiss());
         accept.setOnClickListener(v -> { accept.setEnabled(false); dialog.dismiss(); confirmed.run(); });
         dialog.show();
-        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff101517, 18, 0xff304037));
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff12120f, 18, 0xff69563d));
     }
-    private void error(Exception e) { new WalletDialogBuilder().setTitle("Could not complete action").setMessage(e.getMessage()).setPositiveButton("OK", null).show(); }
+    private void copyError(String message) {
+        getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Wallet error", message));
+        Toast.makeText(this, "Error copied", Toast.LENGTH_SHORT).show();
+    }
+    private TextView copyableError(String message) {
+        TextView failure=text(message);
+        failure.setOnClickListener(v -> copyError(message));
+        return failure;
+    }
+    private void error(Exception e) {
+        String message=e.getMessage()==null ? e.getClass().getSimpleName() : e.getMessage();
+        AlertDialog dialog=new WalletDialogBuilder().setTitle("Could not complete action").setMessage(message)
+            .setNeutralButton("Copy error", (d,which) -> copyError(message)).setPositiveButton("OK", null).show();
+        TextView details=dialog.findViewById(android.R.id.message);
+        if (details!=null) details.setOnClickListener(v -> copyError(message));
+    }
     private void work(Job job) {
         if (busy || node == null) return;
         busy = true;
         node.io.execute(() -> { try { job.run(); } catch (Exception e) { runOnUiThread(() -> error(e)); }
             finally { runOnUiThread(() -> busy = false); } });
+    }
+    // Balance polling must not lock navigation or consume button taps. Keep it on
+    // the node's serial executor so a user operation still cannot overlap its RPCs.
+    private void homeRefreshWork(Job job) {
+        if (busy || refreshingHome || node == null) return;
+        refreshingHome = true;
+        final LinearLayout originPage = page;
+        try {
+            node.io.execute(() -> {
+                try { job.run(); }
+                catch (Exception e) { runOnUiThread(() -> {
+                    if (!isDestroyed() && page == originPage && !busy) error(e);
+                }); }
+                finally { runOnUiThread(() -> refreshingHome = false); }
+            });
+        } catch (RuntimeException e) {
+            refreshingHome = false;
+            error(e);
+        }
     }
     private void wallets() {
         page("Wallets");
@@ -650,14 +774,14 @@ public final class MainActivity extends Activity {
         LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(20), dp(8), dp(20), dp(8));
         TextView caption = new TextView(this); caption.setText("Name"); caption.setTextSize(15);
-        caption.setTextColor(0xffafbeb6); form.addView(caption);
+        caption.setTextColor(0xffc2b69f); form.addView(caption);
         EditText name = field(form, "Optional", prefs.getString("wallet-name", ""));
         name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(32)});
         name.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         name.setSelectAllOnFocus(true);
         name.setContentDescription("Wallet name, up to 32 characters");
         TextView help = new TextView(this); help.setText("Leave blank to use the default name."); help.setTextSize(13);
-        help.setTextColor(0xffafbeb6); help.setPadding(0, dp(8), 0, dp(8)); form.addView(help);
+        help.setTextColor(0xffc2b69f); help.setPadding(0, dp(8), 0, dp(8)); form.addView(help);
         AlertDialog dialog = new WalletDialogBuilder().setTitle("Rename wallet").setView(form)
             .setNegativeButton("Cancel", null).setPositiveButton("Save", null).create();
         dialog.show();
@@ -923,17 +1047,17 @@ public final class MainActivity extends Activity {
         refresh();
     }
     private void refresh() {
-        final String origin = screen;
-        work(() -> {
+        final LinearLayout originPage = page;
+        homeRefreshWork(() -> {
             Stateservice.WalletState state = node.walletState();
             if (state == Stateservice.WalletState.NON_EXISTING) {
-                runOnUiThread(this::createWalletIntro); return;
+                runOnUiThread(() -> { if (page == originPage && !busy) createWalletIntro(); }); return;
             }
-            if (state == Stateservice.WalletState.LOCKED) { node.unlock(); runOnUiThread(this::home); return; }
+            if (state == Stateservice.WalletState.LOCKED) { node.unlock(); runOnUiThread(() -> { if (page == originPage && !busy) home(); }); return; }
             if (state != Stateservice.WalletState.SERVER_ACTIVE) {
                 SyncProgress progress = node.syncProgress();
                 runOnUiThread(() -> {
-                    if (!screen.equals(origin)) return;
+                    if (page != originPage || busy) return;
                     page("Starting...");
                     text(state == Stateservice.WalletState.UNLOCKED ? "Wallet unlocked · synchronizing chain" : "Preparing wallet");
                     if (progress.target > 0) {
@@ -973,7 +1097,7 @@ public final class MainActivity extends Activity {
                     throw new Exception("Could not save channel history.");
             }
             runOnUiThread(() -> {
-                if (!screen.equals(origin) || walletPopup != null || !channelExpansions.isEmpty() || (headerSlideAnimation != null && headerSlideAnimation.isRunning()) || ((homeActionsAnimation[0] != null && homeActionsAnimation[0].isRunning()) || (homeActionsAnimation[1] != null && homeActionsAnimation[1].isRunning()))) return;
+                if (page != originPage || busy || touchInProgress || walletPopup != null || !channelExpansions.isEmpty() || (headerSlideAnimation != null && headerSlideAnimation.isRunning()) || ((homeActionsAnimation[0] != null && homeActionsAnimation[0].isRunning()) || (homeActionsAnimation[1] != null && homeActionsAnimation[1].isRunning()))) return;
                 page("Home");
                 long channelFunds = 0, receivable = 0;
                 for (LightningOuterClass.Channel channel : active.getChannelsList()) {
@@ -1080,13 +1204,13 @@ public final class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(4), dp(10), dp(4), dp(10));
         TextView name = new TextView(channelContext);
-        name.setText(label); name.setTextSize(16); name.setTextColor(0xffe5eee9);
+        name.setText(label); name.setTextSize(16); name.setTextColor(0xffedddbc);
         name.setMaxLines(1); name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
         if (!confirmations.isEmpty()) {
             TextView confirmation = new TextView(channelContext);
             confirmation.setText(confirmations); confirmation.setTextSize(11);
-            confirmation.setTextColor(0xffafbeb6);
+            confirmation.setTextColor(0xffc2b69f);
             row.addView(confirmation, new LinearLayout.LayoutParams(-2, -2));
         }
         int[] lightColor = {color};
@@ -1109,6 +1233,12 @@ public final class MainActivity extends Activity {
         card.addView(row, new LinearLayout.LayoutParams(-1, -2));
         View liquidity = new View(this) {
             private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            private android.graphics.Shader greenGradient;
+            @Override protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+                super.onSizeChanged(w, h, oldw, oldh);
+                greenGradient = new android.graphics.LinearGradient(0, 0, 0, Math.max(1, h),
+                    0xff35855b, 0xff246545, android.graphics.Shader.TileMode.CLAMP);
+            }
             @Override protected void onDraw(android.graphics.Canvas canvas) {
                 super.onDraw(canvas);
                 float fraction = local + (double) remote <= 0 ? 0 : (float) (local / (local + (double) remote));
@@ -1116,7 +1246,9 @@ public final class MainActivity extends Activity {
                 outline.addRoundRect(0, 0, getWidth(), getHeight(), getHeight() / 2f, getHeight() / 2f, android.graphics.Path.Direction.CW);
                 int saved = canvas.save(); canvas.clipPath(outline);
                 paint.setColor(0xffb59b72); canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-                paint.setColor(0xff65d89a); canvas.drawRect(0, 0, getWidth() * fraction, getHeight(), paint);
+                paint.setShader(greenGradient);
+                canvas.drawRect(0, 0, getWidth() * fraction, getHeight(), paint);
+                paint.setShader(null);
                 canvas.restoreToCount(saved);
             }
         };
@@ -1138,17 +1270,17 @@ public final class MainActivity extends Activity {
             long value = side == 0 ? local : remote;
             TextView balances = new TextView(channelContext);
             balances.setText((side == 0 ? "Local: " : "Remote: ") + displayAmount(value));
-            balances.setTextSize(12.6f); balances.setTextColor(0xffafbeb6);
+            balances.setTextSize(12.6f); balances.setTextColor(0xffc2b69f);
             balances.setGravity(side == 0 ? Gravity.START : Gravity.END);
             balances.setTag(new long[]{value, side}); homeChannelBalances.add(balances);
             balanceRow.addView(balances, new LinearLayout.LayoutParams(0, -2, 1));
         }
         expanded.addView(balanceRow);
         LinearLayout statusRow = new LinearLayout(this); statusRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView statusTitle = new TextView(channelContext); statusTitle.setText("Status:"); statusTitle.setTextSize(12.6f); statusTitle.setTextColor(0xffafbeb6);
+        TextView statusTitle = new TextView(channelContext); statusTitle.setText("Status:"); statusTitle.setTextSize(12.6f); statusTitle.setTextColor(0xffc2b69f);
         statusRow.addView(statusTitle, new LinearLayout.LayoutParams(0, -2, 1));
         LinearLayout connection = new LinearLayout(this); connection.setGravity(Gravity.CENTER_VERTICAL);
-        TextView statusText = new TextView(channelContext); statusText.setText(status); statusText.setTextSize(12.6f); statusText.setTextColor(0xffafbeb6);
+        TextView statusText = new TextView(channelContext); statusText.setText(status); statusText.setTextSize(12.6f); statusText.setTextColor(0xffc2b69f);
         statusText.setGravity(Gravity.END);
         connection.addView(statusText, new LinearLayout.LayoutParams(0, -2, 1));
         if (disconnected) {
@@ -1171,7 +1303,7 @@ public final class MainActivity extends Activity {
         }
         statusRow.addView(connection, new LinearLayout.LayoutParams(0, -2, 1));
         expanded.addView(statusRow);
-        TextView more = new TextView(channelContext); more.setText("Channel details"); more.setTextSize(12.6f); more.setTextColor(0xffa8efd5);
+        TextView more = new TextView(channelContext); more.setText("Channel details"); more.setTextSize(12.6f); more.setTextColor(0xffe0c18c);
         more.setPadding(0, dp(10), 0, dp(10)); more.setOnClickListener(v -> details.run());
         expanded.addView(more);
         card.addView(expanded, new LinearLayout.LayoutParams(-1, -2));
@@ -1253,12 +1385,22 @@ public final class MainActivity extends Activity {
         channelExpansions.put(key, animation); animation.start();
     }
     private void homeScanButton() {
-        Button scan = button("Scan", () -> {
+        android.widget.ImageButton scan = new android.widget.ImageButton(this);
+        scan.setImageResource(R.drawable.vintage_camera);
+        scan.setContentDescription("Scan a Lightning invoice or Bitcoin address");
+        scan.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        scan.setPadding(dp(14), dp(12), dp(14), dp(12));
+        scan.setBackground(new android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(0x33e1b879),
+            surface(0xff30271e, 14, 0xff81694b), null));
+        scan.setOnClickListener(v -> {
+            if (busy) { showOperationInProgress(); return; }
             scanTarget = null;
             scanPayment = true;
             launchScanner("Scan a Lightning invoice or Bitcoin address");
         });
-        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(160), dp(56));
+        page.addView(scan);
+        LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(dp(72), dp(72));
         size.gravity = Gravity.CENTER_HORIZONTAL;
         size.topMargin = dp(24); size.bottomMargin = dp(16);
         scan.setLayoutParams(size);
@@ -1269,30 +1411,39 @@ public final class MainActivity extends Activity {
         balanceDropdown(1, "Lightning", this::payment, this::receiveLightning);
         updateBalanceAmounts();
     }
+    private void styleHomeBalance(Button amount) {
+        styleButton(amount, false);
+        amount.setBackground(null);
+        amount.setTextSize(17);
+        amount.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        amount.setPadding(dp(4), dp(4), dp(4), dp(4));
+        amount.setMinHeight(dp(36)); amount.setMinimumHeight(dp(36));
+        amount.setMaxLines(1);
+    }
     private void balanceDropdown(int index, String label, Runnable sendAction, Runnable receiveAction) {
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setClipChildren(true);
         homeActionsViews[index] = actions;
-        Button chain = button(label, () -> {
+        Button chain = button(label, () -> {});
+        // Expanding local controls must not wait for the periodic node queries.
+        chain.setOnClickListener(v -> {
             boolean expand = !homeActionsExpanded[index];
             int other = 1 - index;
             if (expand && homeActionsExpanded[other]) animateHomeActions(other, false);
             animateHomeActions(index, expand);
         });
         chain.setAllCaps(false);
-        chain.setBackground(null);
         page.removeView(chain);
         LinearLayout balanceRow = new LinearLayout(this);
         balanceRow.setGravity(Gravity.CENTER_VERTICAL);
         chain.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        chain.setTextSize(16.5f);
-        chain.setMinHeight(dp(62.4f)); chain.setMinimumHeight(dp(62.4f));
-        chain.setPadding(dp(16.8f), dp(14.4f), dp(16.8f), dp(14.4f));
+        chain.setTextSize(16.5f * 1.15f);
+        chain.setMinHeight(dp(62.4f * 1.15f)); chain.setMinimumHeight(dp(62.4f * 1.15f));
+        chain.setPadding(dp(16.8f * 1.15f), dp(14.4f * 1.15f), dp(16.8f * 1.15f), dp(14.4f * 1.15f));
         balanceRow.addView(chain, new LinearLayout.LayoutParams(-2, -2));
-        Button amount = new Button(this); styleButton(amount, false);
-        amount.setBackground(null);
-        amount.setTextColor(0xffa8efd5); amount.setTextSize(17); amount.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        Button amount = new Button(this); styleHomeBalance(amount);
+        amount.setTextColor(0xfff1dfbb);
         balanceAmounts[index] = amount;
         View.OnClickListener cycleUnits = v -> {
             int count = prefs.getString("fiat-currency", "USD").equals("Off") ? 2 : 3;
@@ -1306,23 +1457,21 @@ public final class MainActivity extends Activity {
             balanceRow.addView(amount, amountSize);
         } else {
             LinearLayout liquidity = new LinearLayout(this); liquidity.setOrientation(LinearLayout.VERTICAL);
-            Button incoming = new Button(this); styleButton(incoming, false); incoming.setBackground(null);
+            Button incoming = new Button(this); styleHomeBalance(incoming);
             incoming.setTextColor(0xffe8d2a7); incoming.setOnClickListener(cycleUnits); balanceAmounts[2] = incoming;
             Button[] values = {amount, incoming};
-            String[] labels = {"Spendable", "Receivable"};
+            String[] labels = {"", "Receivable"};
             for (int i = 0; i < values.length; i++) {
                 LinearLayout line = new LinearLayout(this); line.setGravity(Gravity.CENTER_VERTICAL);
                 TextView caption = new TextView(this); caption.setText(labels[i]); caption.setTextSize(12);
                 caption.setGravity(Gravity.END); caption.setPadding(0, 0, dp(6), 0);
-                caption.setTextColor(i == 0 ? 0xffa8efd5 : 0xffe8d2a7);
+                caption.setTextColor(i == 0 ? 0xfff1dfbb : 0xffe8d2a7);
                 caption.setOnClickListener(cycleUnits);
                 line.addView(caption, new LinearLayout.LayoutParams(0, -2, 1));
                 Button value = values[i];
-                value.setPadding(dp(4), 0, dp(4), 0);
-                value.setMinHeight(0); value.setMinimumHeight(0);
-                value.setGravity(Gravity.END | Gravity.CENTER_VERTICAL); value.setMaxLines(1);
-                value.setTextSize(14.5f);
-                line.addView(value, new LinearLayout.LayoutParams(-2, dp(27)));
+                line.addView(value, new LinearLayout.LayoutParams(-2, -2));
+                if (i == 1 && !prefs.getBoolean("home-show-receivable", false))
+                    line.setVisibility(View.GONE);
                 liquidity.addView(line, new LinearLayout.LayoutParams(-1, -2));
             }
             balanceRow.addView(liquidity, amountSize);
@@ -1384,19 +1533,31 @@ public final class MainActivity extends Activity {
         long now = android.os.SystemClock.elapsedRealtime();
         if (ratesLoading || (lastRatesAttempt != 0 && now - lastRatesAttempt < 60000)) return;
         ratesLoading = true; lastRatesAttempt = now;
+        final long generation = ratesGeneration;
+        final String source = prefs.getString("fiat-source-url", "");
+        final String pricePath = prefs.getString("fiat-source-price-path", "ticker.lastPrice");
+        final String timestampPath = prefs.getString("fiat-source-time-path", "ticker.computedAt");
+        final boolean tor = prefs.getBoolean("useTor", false) || (!source.isEmpty() && ControllerAddress.onion(source));
         new Thread(() -> {
             org.json.JSONObject result = null;
-            try { result = FiatRates.fetch(prefs.getBoolean("useTor", false)); } catch (Exception ignored) {}
+            try {
+                if (tor) setupTor.start(this, message -> {});
+                result = FiatRates.fetch(tor, source, pricePath, timestampPath);
+            } catch (Exception ignored) {}
             final org.json.JSONObject fetched = result;
             runOnUiThread(() -> {
+                if (isDestroyed() || generation != ratesGeneration) return;
                 ratesLoading = false;
-                if (isDestroyed()) return;
                 if (fetched != null) {
                     fiatRates = fetched;
                     prefs.edit().putString("fiat-rates", fetched.toString()).apply();
                 }
                 updateHeaderRate();
                 if (screen.equals("Home")) updateBalanceAmounts();
+                if (screen.equals("On chain funds") && updateUtxoAmounts != null) updateUtxoAmounts.run();
+                if (screen.equals("Channel details") && updateChannelDetailAmounts != null) updateChannelDetailAmounts.run();
+                if (receivedAmountText != null) updateReceivedAmount();
+                if (swapReceiveAmountText != null) updateSwapReceiveAmount();
                 if (activeAmountEntry != null) {
                     activeAmountEntry.changed.run();
                     activeAmountEntry.updateEquivalent();
@@ -1506,6 +1667,62 @@ public final class MainActivity extends Activity {
         void visible(boolean show) { title.setVisibility(show ? View.VISIBLE : View.GONE); row.setVisibility(show ? View.VISIBLE : View.GONE); updateEquivalent(); }
         void enabled(boolean enabled) { input.setEnabled(enabled); currency.setEnabled(enabled); }
     }
+    private void saveFiatSource(String url, String pricePath, String timestampPath, org.json.JSONObject quote) throws Exception {
+        android.content.SharedPreferences.Editor edit = prefs.edit()
+            .putString("fiat-source-url", url).putString("fiat-source-price-path", pricePath)
+            .putString("fiat-source-time-path", timestampPath).remove("fiat-rates");
+        if (quote != null) edit.putString("fiat-rates", quote.toString());
+        if (!edit.commit()) throw new Exception("Could not save the fiat price source.");
+        ratesGeneration++; ratesLoading = false; lastRatesAttempt = 0; fiatRates = quote;
+    }
+    private void fiatPriceSource() {
+        page("Fiat price source");
+        text("Default: Neoxa XBT/USDC, treating 1 USDC as approximately 1 USD. Other fiat currencies use Frankfurter conversion rates.");
+        text("A custom API must return the USD price of one XBT and its quote timestamp. Use XBT (Bitcoin Blake2b), not BTC. Only prices are requested; wallet amounts are converted on your phone.");
+        text("Price API URL");
+        EditText url = field("https://…", prefs.getString("fiat-source-url", "").isEmpty()
+            ? FiatRates.DEFAULT_URL : prefs.getString("fiat-source-url", ""));
+        url.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        text("Price JSON field");
+        EditText price = field("ticker.lastPrice", prefs.getString("fiat-source-price-path", "ticker.lastPrice"));
+        text("Timestamp JSON field");
+        EditText timestamp = field("ticker.computedAt", prefs.getString("fiat-source-time-path", "ticker.computedAt"));
+        text("Use dot-separated fields, for example data.price. Timestamps must be Unix seconds or milliseconds. Quotes older than 15 minutes are rejected. Onion APIs use Tor automatically.");
+        TextView status = text("");
+        button("Test and save", () -> {
+            final String endpoint, pricePath, timePath;
+            try {
+                endpoint = FiatRates.sourceUrl(url.getText().toString());
+                pricePath = FiatRates.jsonPath(price.getText().toString());
+                timePath = FiatRates.jsonPath(timestamp.getText().toString());
+            } catch (Exception e) { error(e); return; }
+            busy = true; status.setText("Checking price source…");
+            final boolean tor = prefs.getBoolean("useTor", false) || ControllerAddress.onion(endpoint);
+            new Thread(() -> {
+                try {
+                    if (tor) setupTor.start(this, message -> {});
+                    org.json.JSONObject quote = FiatRates.fetch(tor, endpoint, pricePath, timePath);
+                    runOnUiThread(() -> {
+                        busy = false;
+                        if (isDestroyed()) return;
+                        try {
+                            saveFiatSource(endpoint, pricePath, timePath, quote);
+                            status.setText("Saved · 1 XBT = " + quote.getString("USD") + " USD");
+                        } catch (Exception e) { error(e); }
+                    });
+                } catch (Exception e) { runOnUiThread(() -> {
+                    busy = false;
+                    if (!isDestroyed()) { status.setText("Source not saved."); error(e); }
+                }); }
+            }, "test-fiat-source").start();
+        });
+        button("Use Neoxa default", () -> {
+            try { saveFiatSource("", "ticker.lastPrice", "ticker.computedAt", null); fiatPriceSource(); }
+            catch (Exception e) { error(e); }
+        });
+        text("This setting changes fiat valuation only. Swap market comparisons currently use Neoxa’s XBT/BTC market.");
+        button("Back", this::advanced);
+    }
     private void fiatCurrency() {
         String selected = prefs.getString("fiat-currency", "USD");
         String[] labels = new String[FiatRates.CURRENCIES.length + 1]; int checked = 0;
@@ -1565,6 +1782,7 @@ public final class MainActivity extends Activity {
     private String coinLabel(LightningOuterClass.Utxo coin) {
         return prefs.getString("utxo-label-" + outpoint(coin), "");
     }
+    private Runnable updateUtxoAmounts;
     private void utxos() {
         work(() -> {
             LightningOuterClass.ListUnspentResponse outputs = LightningOuterClass.ListUnspentResponse.parseFrom(node.rpc("listUnspent",
@@ -1572,14 +1790,47 @@ public final class MainActivity extends Activity {
             LightningOuterClass.WalletBalanceResponse balance = LightningOuterClass.WalletBalanceResponse.parseFrom(node.rpc("walletBalance", LightningOuterClass.WalletBalanceRequest.getDefaultInstance()));
             runOnUiThread(() -> {
                 page("On chain funds");
-                text(balance.getConfirmedBalance() + " sats confirmed\n" + balance.getUnconfirmedBalance() + " sats unconfirmed");
+                LinearLayout fundsPage = page;
+                List<Runnable> amountUpdates = new ArrayList<>();
+                TextView totals = text("");
+                amountUpdates.add(() -> totals.setText(displayAmount(balance.getConfirmedBalance()) + " confirmed\n"
+                    + displayAmount(balance.getUnconfirmedBalance()) + " unconfirmed"));
+                updateUtxoAmounts = () -> {
+                    if (page == fundsPage) for (Runnable update : amountUpdates) update.run();
+                };
+                View.OnClickListener cycle = v -> {
+                    int count = prefs.getString("fiat-currency", "USD").equals("Off") ? 2 : 3;
+                    prefs.edit().putInt("display-unit", (displayUnit() + 1) % count).apply();
+                    updateUtxoAmounts.run();
+                    if (displayUnit() == 2) fetchFiatRates();
+                };
+                totals.setOnClickListener(cycle);
                 button("Receive XBT", this::deposit);
                 if (outputs.getUtxosCount() == 0) text("No unspent outputs.");
-                else text("Tap an output to edit its label.");
+                else text("Tap an amount to change units. Tap an output’s label or details to edit its label.");
                 for (LightningOuterClass.Utxo coin : outputs.getUtxosList()) {
+                    LinearLayout card = new LinearLayout(this); card.setOrientation(LinearLayout.VERTICAL);
+                    card.setPadding(dp(14), dp(8), dp(14), dp(8));
+                    card.setBackground(surface(0xff30271e, 14, 0xff81694b));
+                    LinearLayout.LayoutParams cardSize = new LinearLayout.LayoutParams(-1, -2);
+                    cardSize.setMargins(0, dp(5), 0, dp(5)); page.addView(card, cardSize);
                     String label = coinLabel(coin);
-                    button((label.isEmpty() ? "Unlabelled output" : label) + "\n" + displayAmount(coin.getAmountSat()) + " · " + coin.getConfirmations() + " confirmations\n" + outpoint(coin), () -> labelCoin(coin));
+                    TextView name = new TextView(this); name.setText(label.isEmpty() ? "Unlabelled output" : label);
+                    name.setTextSize(15); name.setTextColor(0xffedddbc); name.setPadding(0, dp(8), 0, dp(8));
+                    name.setOnClickListener(v -> labelCoin(coin)); card.addView(name);
+                    Button amount = new Button(this); styleButton(amount, false); amount.setBackground(null);
+                    amount.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); amount.setPadding(0, dp(8), 0, dp(8));
+                    amount.setOnClickListener(cycle); card.addView(amount, new LinearLayout.LayoutParams(-1, -2));
+                    amountUpdates.add(() -> {
+                        amount.setText(displayAmount(coin.getAmountSat()));
+                        amount.setContentDescription(amount.getText() + ". Tap to change units.");
+                    });
+                    TextView details = new TextView(this); details.setText(coin.getConfirmations() + " confirmations\n" + outpoint(coin));
+                    details.setTextColor(0xffc2b69f); details.setTextSize(14); details.setPadding(0, dp(4), 0, dp(8));
+                    details.setOnClickListener(v -> labelCoin(coin)); card.addView(details);
                 }
+                updateUtxoAmounts.run();
+                if (displayUnit() == 2) fetchFiatRates();
                 button("Refresh", this::utxos); button("Home", this::home);
             });
         });
@@ -1661,14 +1912,14 @@ public final class MainActivity extends Activity {
         form.setPadding(dp(20), dp(20), dp(20), dp(20));
         form.setFocusableInTouchMode(true);
         TextView title = new TextView(this); title.setText("Label channel"); title.setTextSize(20);
-        title.setTextColor(0xffeef5f0); title.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+        title.setTextColor(0xfff2e6ce); title.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.BOLD);
         title.setPadding(0, 0, 0, dp(16)); form.addView(title);
         TextView caption = new TextView(this); caption.setText("Label"); caption.setTextSize(15);
-        caption.setTextColor(0xffafbeb6); form.addView(caption);
+        caption.setTextColor(0xffc2b69f); form.addView(caption);
         EditText input = field(form, "Optional", prefs.getString("channel-label-" + point, ""));
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(120)});
         TextView help = new TextView(this); help.setText("Leave blank to remove the label."); help.setTextSize(13);
-        help.setTextColor(0xffafbeb6); help.setPadding(0, 0, 0, dp(16)); form.addView(help);
+        help.setTextColor(0xffc2b69f); help.setPadding(0, 0, 0, dp(16)); form.addView(help);
         LinearLayout actions = new LinearLayout(this); actions.setBaselineAligned(false);
         Button cancel = new Button(this); cancel.setText("Cancel"); styleButton(cancel, false);
         Button save = new Button(this); save.setText("Save"); styleButton(save, true);
@@ -1686,22 +1937,47 @@ public final class MainActivity extends Activity {
             dialog.dismiss(); back.run();
         });
         dialog.show();
-        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff101517, 18, 0xff304037));
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff12120f, 18, 0xff69563d));
     }
 
+    private Runnable updateChannelDetailAmounts;
+    private String detailChannelPoint;
     private void channelDetails(LightningOuterClass.Channel channel) {
         rememberChannelOrigin();
         page("Channel details", false, () -> channelDetails(channel));
         String label = prefs.getString("channel-label-" + SpliceStatus.identity(channel), "");
         if (!label.isEmpty()) text(label);
         button(label.isEmpty() ? "Add label" : "Edit label", () -> labelChannel(SpliceStatus.identity(channel), () -> channelDetails(channel)));
-        text((channel.getActive() ? "Online" : "Offline") + " · " + channel.getCapacity() + " sats capacity");
-        text(channel.getLocalBalance() + " sats local balance\n" + channel.getRemoteBalance() + " sats remote balance");
+        detailChannelPoint = channel.getChannelPoint();
+        text((channel.getActive() ? "Online" : "Offline") + " · " + (channel.getPrivate() ? "Private channel" : "Public channel"));
+        TextView capacity = text("");
+        TextView balances = text("");
+        LinearLayout detailsPage = page;
+        updateChannelDetailAmounts = () -> {
+            if (page != detailsPage) return;
+            capacity.setText(displayAmount(channel.getCapacity()) + " capacity");
+            balances.setText(displayAmount(channel.getLocalBalance()) + " local balance\n"
+                + displayAmount(channel.getRemoteBalance()) + " remote balance");
+            if (channel.hasPendingSplice() && spliceDetailsText != null) {
+                LightningOuterClass.Channel current = spliceDetailsText.getTag() instanceof LightningOuterClass.Channel
+                    ? (LightningOuterClass.Channel) spliceDetailsText.getTag() : channel;
+                spliceDetailsText.setText(SpliceStatus.details(current, this::displayAmount));
+            }
+        };
+        View.OnClickListener cycleAmounts = v -> {
+            int count = prefs.getString("fiat-currency", "USD").equals("Off") ? 2 : 3;
+            prefs.edit().putInt("display-unit", (displayUnit() + 1) % count).apply();
+            updateChannelDetailAmounts.run();
+            if (displayUnit() == 2) fetchFiatRates();
+        };
+        capacity.setOnClickListener(cycleAmounts); balances.setOnClickListener(cycleAmounts);
         text("Peer\n" + channel.getRemotePubkey());
         fundingOutput(channel.getChannelPoint());
         if (channel.hasPendingSplice()) {
             viewingSpliceChannel = SpliceStatus.identity(channel);
             spliceDetailsText = text(SpliceStatus.details(channel, this::displayAmount));
+            spliceDetailsText.setTag(channel);
+            spliceDetailsText.setOnClickListener(cycleAmounts);
             spliceDetailsText.setTextColor(0xffffb454);
             spliceRefreshError = text(""); spliceRefreshError.setTextColor(0xffed6b73);
             String txid = channel.getPendingSplice().getTxid();
@@ -1721,7 +1997,9 @@ public final class MainActivity extends Activity {
             String closing = prefs.getString(key, "");
             if (!closing.isEmpty()) text(closing);
             text("Closing returns your remaining funds to your on-chain wallet after fees and confirmation. A cooperative close requires the peer to be online.");
-            EditText rate = field("Closing fee rate in sats/vbyte", "1");
+            text("Closing fee rate in sats/vbyte");
+            EditText rate = field("", "1");
+            rate.setContentDescription("Closing fee rate in sats/vbyte");
             Button close = button("Close Channel", () -> {
                 try {
                     long fee = Policy.amount(rate.getText().toString());
@@ -1733,7 +2011,23 @@ public final class MainActivity extends Activity {
             });
             close.setEnabled(channel.getActive() && closing.isEmpty());
             if (!channel.getActive()) text("Reconnect to the peer before closing cooperatively.");
+            Button force = button("Force close", () -> {
+                String remoteNote = node != null && node.isRemote()
+                    ? "\nCore Lightning first allows a brief cooperative close attempt, then closes unilaterally after one second if necessary." : "";
+                new WalletDialogBuilder().setTitle("Force close this channel?")
+                    .setMessage("Your local balance is " + displayAmount(channel.getLocalBalance())
+                        + " before on-chain fees. This permanently closes the channel, even if the peer is offline. "
+                        + "Funds may remain locked for days while timelocks and pending payments resolve. "
+                        + "Additional on-chain fees can apply. Keep your node running to recover the funds. "
+                        + "The cooperative closing fee field does not apply." + remoteNote)
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Force close", (dialog, which) -> closeChannel(channel, 0, true)).show();
+            });
+            styleDestructiveButton(force);
+            force.setEnabled(closing.isEmpty());
         }
+        updateChannelDetailAmounts.run();
+        if (displayUnit() == 2) fetchFiatRates();
         button(channelDetailsFromHome ? "Home" : "Back to channels",
             channelDetailsFromHome ? this::home : this::channelList);
     }
@@ -1751,6 +2045,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (!screen.equals("Channel details") || !identity.equals(viewingSpliceChannel)) return;
                     if (!current.hasPendingSplice() || !current.getPendingSplice().getTxid().equals(viewingSpliceTxid)) { channelDetails(current); return; }
+                    spliceDetailsText.setTag(current);
                     spliceDetailsText.setText(SpliceStatus.details(current, this::displayAmount));
                     spliceRefreshError.setText("");
                 });
@@ -1762,26 +2057,34 @@ public final class MainActivity extends Activity {
         });
     }
 
+    static LightningOuterClass.CloseChannelRequest channelCloseRequest(LightningOuterClass.Channel channel, long fee, boolean force) {
+        String[] point = channel.getChannelPoint().split(":");
+        LightningOuterClass.CloseChannelRequest.Builder request = LightningOuterClass.CloseChannelRequest.newBuilder()
+            .setChannelPoint(LightningOuterClass.ChannelPoint.newBuilder().setFundingTxidStr(point[0]).setOutputIndex(Integer.parseInt(point[1])))
+            .setForce(force);
+        if (!force) request.setSatPerVbyte(fee).setMaxFeePerVbyte(fee);
+        return request.build();
+    }
     private void closeChannel(LightningOuterClass.Channel channel, long fee) {
+        closeChannel(channel, fee, false);
+    }
+    private void closeChannel(LightningOuterClass.Channel channel, long fee, boolean force) {
         work(() -> {
             final String key = "channel-close-" + channel.getChannelPoint();
             if (prefs.contains(key)) throw new Exception("A close request is already recorded. Check channel status before any further attempt.");
             // Re-read the node immediately before a user-authorized submission.
             LightningOuterClass.ListChannelsResponse current = LightningOuterClass.ListChannelsResponse.parseFrom(node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
-            boolean online = false;
+            boolean found = false, online = false;
             for (LightningOuterClass.Channel c : current.getChannelsList())
                 if (c.getChannelPoint().equals(channel.getChannelPoint())) {
                     if (c.hasPendingSplice()) throw new Exception("A splice is pending. Wait for it to finish before closing this channel.");
-                    online = c.getActive();
+                    found = true; online = c.getActive();
                 }
-            if (!online) throw new Exception("This channel is no longer open and online. Refresh the channel list.");
-            String[] point = channel.getChannelPoint().split(":");
-            LightningOuterClass.CloseChannelRequest request = LightningOuterClass.CloseChannelRequest.newBuilder()
-                .setChannelPoint(LightningOuterClass.ChannelPoint.newBuilder().setFundingTxidStr(point[0]).setOutputIndex(Integer.parseInt(point[1])))
-                .setForce(false).setSatPerVbyte(fee).setMaxFeePerVbyte(fee).build();
-            if (!prefs.edit().putString(key, "Close requested. Check Channels for confirmation progress.").commit())
+            if (!found || (!force && !online)) throw new Exception("This channel is no longer available for this close. Refresh the channel list.");
+            LightningOuterClass.CloseChannelRequest request = channelCloseRequest(channel, fee, force);
+            if (!prefs.edit().putString(key, (force ? "Force close" : "Close") + " requested. Check Channels for confirmation progress.").commit())
                 throw new Exception("Could not save close request.");
-            runOnUiThread(() -> { if (!isDestroyed()) channelDetails(channel); });
+            runOnUiThread(() -> { if (!isDestroyed() && channel.getChannelPoint().equals(detailChannelPoint)) channelDetails(channel); });
             node.closeChannel(request.toByteArray(), new lndmobile.RecvStream() {
                 private volatile boolean terminal;
                 public void onResponse(byte[] data) {
@@ -1791,20 +2094,20 @@ public final class MainActivity extends Activity {
                         String status = terminal ? "Channel closed." : update.hasClosePending()
                             ? "Closing transaction broadcast. Waiting for confirmation." : "Close requested. Waiting for the peer.";
                         prefs.edit().putString(key, status).commit();
-                        runOnUiThread(() -> { if (!isDestroyed() && screen.equals("Channel details")) channelDetails(channel); });
+                        runOnUiThread(() -> { if (!isDestroyed() && channel.getChannelPoint().equals(detailChannelPoint)) channelDetails(channel); });
                     } catch (Exception e) { onError(e); }
                 }
                 public void onError(Exception e) {
                     if (terminal) return;
                     prefs.edit().putString(key, "Close status needs checking: " + e.getMessage() + ". Refresh Channels before attempting anything else.").commit();
-                    runOnUiThread(() -> { if (!isDestroyed() && screen.equals("Channel details")) channelDetails(channel); });
+                    runOnUiThread(() -> { if (!isDestroyed() && channel.getChannelPoint().equals(detailChannelPoint)) channelDetails(channel); });
                 }
             });
         });
     }
     private void more() {
         if (walletMenuAnchor == null || walletPopup != null) return;
-        PopupMenu popup = new PopupMenu(this, walletMenuAnchor, Gravity.END);
+        PopupMenu popup = new PopupMenu(new android.view.ContextThemeWrapper(this, R.style.WalletDotsMenuTheme), walletMenuAnchor, Gravity.END);
         walletPopup = popup;
         String[] labels = {"Wallets", "Payment history", "On chain funds", "Channels", "Swap controllers", "Advanced"};
         Runnable[] actions = {this::wallets, this::paymentHistory, this::utxos, this::channelList, this::swapControllers, this::advanced};
@@ -1814,7 +2117,7 @@ public final class MainActivity extends Activity {
             popup.getMenu().add(0, i, i, label);
         }
         popup.setOnMenuItemClickListener(item -> {
-            if (busy) return true;
+            if (busy) { showOperationInProgress(); return true; }
             popup.dismiss(); actions[item.getItemId()].run(); return true;
         });
         popup.setOnDismissListener(menu -> { if (walletPopup == popup) walletPopup = null; });
@@ -1859,8 +2162,8 @@ public final class MainActivity extends Activity {
         page("Add peer");
         text("Peer address");
         EditText address = field("pubkey@host:port", initial);
-        button("Scan QR", () -> scan(address));
-        button("Paste from Clipboard", () -> {
+        Button scanPeer = button("Scan QR", () -> scan(address));
+        Button pastePeer = button("Paste from Clipboard", () -> {
             android.content.ClipboardManager clipboard = getSystemService(android.content.ClipboardManager.class);
             ClipData clip = clipboard.getPrimaryClip();
             if (clip == null || clip.getItemCount() == 0 || clip.getItemAt(0).getText() == null) {
@@ -1869,17 +2172,55 @@ public final class MainActivity extends Activity {
             address.setText(clip.getItemAt(0).getText().toString().trim());
         });
         text("Use a public key followed by @host:port. Onion addresses require Tor enabled in Node connection and an app restart.");
-        button("Connect", () -> {
+        TextView status = text("");
+        status.setVisibility(View.GONE);
+        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        TextView failureDetails = text("");
+        failureDetails.setVisibility(View.GONE);
+        address.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                status.setVisibility(View.GONE);
+                failureDetails.setVisibility(View.GONE);
+            }
+            public void afterTextChanged(android.text.Editable s) {}
+        });
+        Button[] connect = new Button[1];
+        connect[0] = button("Connect", () -> {
+            if (busy) return;
+            java.util.function.Consumer<Exception> finished = failure -> {
+                if (!status.isAttachedToWindow()) return;
+                address.setEnabled(true);
+                scanPeer.setEnabled(true); pastePeer.setEnabled(true);
+                connect[0].setEnabled(true);
+                status.setVisibility(View.VISIBLE);
+                status.setText(failure == null ? "Connected" : "Failed to connect");
+                status.setTextColor(failure == null ? 0xffa8efd5 : 0xffff8c8c);
+                failureDetails.setText(failure == null ? "" : failure.getMessage());
+                failureDetails.setVisibility(failure == null ? View.GONE : View.VISIBLE);
+            };
             try {
+                if (node == null) throw new Exception("The wallet is not connected to its node yet. Try again once it is ready.");
                 String[] peer = Policy.peer(address.getText().toString());
-                connectPeerAddress(peer[0].toLowerCase(Locale.ROOT), peer[1],
-                    () -> Toast.makeText(this, "Connecting to peer…", Toast.LENGTH_SHORT).show(), this::peerList);
-            } catch (Exception e) { error(e); }
+                connectPeerAddress(peer[0].toLowerCase(Locale.ROOT), peer[1], () -> {
+                    address.setEnabled(false);
+                    scanPeer.setEnabled(false); pastePeer.setEnabled(false);
+                    connect[0].setEnabled(false);
+                    failureDetails.setVisibility(View.GONE);
+                    status.setVisibility(View.VISIBLE);
+                    status.setText("Adding...");
+                    status.setTextColor(0xffe8d2a7);
+                }, () -> {}, finished);
+            } catch (Exception e) { finished.accept(e); }
         });
         button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection);
         button("Back to peers", this::peerList);
     }
     private void connectPeerAddress(String publicKey, String suppliedAddress, Runnable started, Runnable complete) {
+        connectPeerAddress(publicKey, suppliedAddress, started, complete, null);
+    }
+    private void connectPeerAddress(String publicKey, String suppliedAddress, Runnable started, Runnable complete,
+                                    java.util.function.Consumer<Exception> resultHandler) {
         if (busy || node == null) return;
         String peer = publicKey.toLowerCase(Locale.ROOT);
         busy = true; reconnectingPeers.add(peer); started.run();
@@ -1934,8 +2275,12 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> {
                 busy = false; reconnectingPeers.remove(peer);
                 if (isDestroyed()) return;
-                if (needsAddress) addPeer(peer + "@"); else complete.run();
-                if (result != null) error(new Exception("Peer connection failed: " + result.getMessage()));
+                if (resultHandler != null) {
+                    resultHandler.accept(result);
+                } else {
+                    if (needsAddress) addPeer(peer + "@"); else complete.run();
+                    if (result != null) error(new Exception("Peer connection failed: " + result.getMessage()));
+                }
             });
         });
     }
@@ -1963,17 +2308,33 @@ public final class MainActivity extends Activity {
         button("Back", this::home);
     }
     private void controllerAdd(String address, String expectedIdentity) {
-        page("Add controller", false, () -> controllerAdd(address, expectedIdentity));
+        controllerAdd(address, expectedIdentity, "", "", "");
+    }
+    private void controllerAdd(String address, String expectedIdentity, String apiDraft, String keyDraft, String labelDraft) {
+        page("Add controller", true, () -> controllerAdd(address, expectedIdentity, apiDraft, keyDraft, labelDraft));
         text("Controller address"); EditText url = field("https://… or http://….onion", address);
         url.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        button("Scan QR", () -> scan(url));
-        text("Label"); EditText label = field("Optional — for your own records", "");
+        button("Scan controller address", () -> scan(url));
+        text("Wallet Swap API address");
+        EditText api = field("Optional — https://… or http://….onion", apiDraft);
+        api.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
+        button("Scan API address", () -> scan(api));
+        text("Wallet Swap Access key");
+        EditText accessKey = field("Optional — from the controller’s Swap Setup menu", keyDraft);
+        accessKey.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        button("Scan access key", () -> scan(accessKey));
+        text("Label"); EditText label = field("Optional — for your own records", labelDraft);
         text("Onion addresses connect through Tor automatically.");
         button("Check controller", () -> {
-            final String endpoint;
+            final String endpoint, apiOrigin;
+            final String key = accessKey.getText().toString().trim();
             final String privateLabel = label.getText().toString().trim();
             try {
                 endpoint = ControllerAddress.origin(url.getText().toString());
+                String apiText = api.getText().toString().trim();
+                apiOrigin = apiText.isEmpty() ? "" : ControllerAddress.origin(apiText);
+                if (!key.isEmpty() && !key.matches("[a-f0-9]{64}")) throw new Exception("Enter the 64-character Wallet Swap Access key.");
+                if (!key.isEmpty() && apiOrigin.isEmpty()) throw new Exception("Enter the Wallet Swap API address for this access key.");
                 if (privateLabel.length() > 80) throw new Exception("Use a label up to 80 characters.");
             } catch (Exception e) { error(e); return; }
             work(() -> {
@@ -1990,7 +2351,8 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     page("Review controller"); text(info.name); text(endpoint); text("XBT → BTC · " + info.network);
                     text("Controller identity\n" + info.identity);
-                    text("Connection checked. Configure Wallet Swap Access after saving to receive BTC through this controller.");
+                    if (!apiOrigin.isEmpty()) text("Wallet Swap API address\n" + apiOrigin);
+                    text(key.isEmpty() ? "Controller connection checked. Configure Wallet Swap Access to use swaps." : "Controller connection checked. Wallet Swap API address and access key will be saved; API access has not yet been checked.");
                     button("Save controller", () -> {
                         try {
                             org.json.JSONArray saved = savedControllers(), updated = new org.json.JSONArray();
@@ -1999,11 +2361,14 @@ public final class MainActivity extends Activity {
                             org.json.JSONObject value = info.json().put("address", endpoint).put("checked_at", System.currentTimeMillis());
                             if (!privateLabel.isEmpty()) value.put("label", privateLabel);
                             updated.put(value);
-                            if (!prefs.edit().putString("swap-controllers", updated.toString()).commit()) throw new Exception("Could not save controller.");
+                            android.content.SharedPreferences.Editor settings = prefs.edit().putString("swap-controllers", updated.toString());
+                            if (!apiOrigin.isEmpty()) settings.putString("receive-api-" + info.identity, apiOrigin);
+                            if (!key.isEmpty()) settings.putString("receive-key-" + info.identity, key).putString("receive-provider", info.identity);
+                            if (!settings.commit()) throw new Exception("Could not save controller.");
                             swapControllers();
                         } catch (Exception e) { error(e); }
                     });
-                    button("Back", () -> controllerAdd(endpoint, expectedIdentity));
+                    button("Back", () -> controllerAdd(endpoint, expectedIdentity, apiOrigin, key, privateLabel));
                 });
             });
         });
@@ -2039,6 +2404,7 @@ public final class MainActivity extends Activity {
         String identity = item.optString("provider");
         text("Wallet Swap API address");
         EditText address = field("https://… or http://….onion", prefs.getString("receive-api-" + identity, ""));
+        button("Scan API address", () -> scan(address));
         text("Wallet Swap Access key");
         EditText token = field("From the controller’s Swap Setup menu", prefs.getString("receive-key-" + identity, ""));
         token.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -2090,7 +2456,7 @@ public final class MainActivity extends Activity {
                     row.setOnClickListener(v -> controllerAdd(address, p.identity));
                 }
             }
-            if (matches == 0) { TextView empty = new TextView(this); empty.setText("No matching controllers."); empty.setTextColor(0xffafbeb6); rows.addView(empty); }
+            if (matches == 0) { TextView empty = new TextView(this); empty.setText("No matching controllers."); empty.setTextColor(0xffc2b69f); rows.addView(empty); }
         };
         query.addTextChangedListener(new android.text.TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -2107,13 +2473,248 @@ public final class MainActivity extends Activity {
         if (!walletName.isEmpty()) text("Wallet name: " + walletName);
         text(node == null ? "Node disconnected" : node.status);
         button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection);
-        text("Fiat estimates use Neoxa XBT/USDC (BTCB2_USDC), treating 1 USDC as approximately 1 USD. Other currencies use Frankfurter reference rates. Stale or unavailable quotes display —. Regtest balances are test funds.");
+        button("Fiat price source", this::fiatPriceSource);
+        button("RBF/CPFP", this::feeBumps);
         button("Fiat currency: " + prefs.getString("fiat-currency", "USD"), this::fiatCurrency);
-        button(node != null && node.isRemote() ? "Node backup" : "Back up seed", this::backup);
-        if (node == null || !node.isRemote()) button("Test recovery", this::testRecovery);
+        button("Backup/Recover", this::backupRecover);
+        button("Customization", this::customization);
+        button(WalletPin.enabled(this) ? "PIN code" : "Add a PIN code", this::pinSettings);
         button("Peers", this::peerList);
         button("Create BOLT12", this::createBolt12);
         button("Closed-channel history", this::closedChannels); button("Home", this::home);
+    }
+    private EditText pinField(String hint) {
+        EditText input=field(hint,""); input.setInputType(18); input.setSaveEnabled(false);
+        input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(12)});
+        return input;
+    }
+    private void pinSettings() {
+        page("PIN code");
+        text("This PIN locks access to all wallets in this app. The Lightning node continues running while locked.");
+        TextView warning=text("Warning: if you forget your PIN, it cannot be reset. You will need to recover your wallet using your seed and channel backup, or reconnect your remote node. Back up before enabling a PIN. Seed recovery alone does not restore Lightning channels. In-app seed recovery is not available yet; keep an external recovery path. Do not clear app data or reinstall without your backups.");
+        warning.setTextColor(0xffffa18b);
+        boolean enabled=WalletPin.enabled(this);
+        EditText current=enabled ? pinField("Current PIN") : null;
+        text("New PIN (6–12 digits)"); EditText first=pinField("PIN");
+        text("Confirm PIN"); EditText confirm=pinField("Repeat PIN");
+        CheckBox backedUp=new CheckBox(this); backedUp.setText("I have my recovery information and understand the warning.");
+        page.addView(backedUp);
+        button(enabled ? "Change PIN" : "Add PIN",()->{
+            if(!backedUp.isChecked()) { error(new Exception("Confirm that you have your recovery information first.")); return; }
+            String value=first.getText().toString(), repeated=confirm.getText().toString();
+            if(!value.equals(repeated)) { error(new Exception("PINs do not match.")); return; }
+            if(!value.matches("[0-9]{6,12}")) { error(new Exception("Use 6–12 digits.")); return; }
+            String old=current==null ? "" : current.getText().toString();
+            first.setText(""); confirm.setText(""); if(current!=null)current.setText("");
+            pinUpdate(()->{
+                if(enabled&&!WalletPin.verify(this,old))throw new Exception("Incorrect current PIN.");
+                WalletPin.set(this,value);
+            });
+        });
+        if(enabled) {
+            button("Lock now",()->{ WalletPin.lock(); checkPinLock(); });
+            Button remove=button("Remove PIN",()->{
+                String old=current.getText().toString(); current.setText("");
+                pinUpdate(()->{
+                    if(!WalletPin.verify(this,old))throw new Exception("Incorrect current PIN.");
+                    WalletPin.remove(this);
+                });
+            });
+            styleDestructiveButton(remove);
+        }
+        CheckBox restartOnly=new CheckBox(this);
+        restartOnly.setText("Only require PIN on restart");
+        restartOnly.setChecked(WalletPin.restartOnly(this)); page.addView(restartOnly);
+        text("Lock wallet after");
+        String[] units={"Seconds","Minutes","Hours","Days"};
+        long[] multipliers={1000,60000,3600000,86400000};
+        int initialUnit=0;
+        long saved=WalletPin.timeout(this);
+        for(int i=0;i<multipliers.length;i++)
+            if(saved%multipliers[i]==0 && saved/multipliers[i]>=1 && saved/multipliers[i]<=60)initialUnit=i;
+        final int[] unit={initialUnit};
+        final int[] count={(int)Math.max(1,Math.min(60,saved/multipliers[initialUnit]))};
+        String[] counts=new String[60]; for(int i=0;i<60;i++)counts[i]=Integer.toString(i+1);
+        LinearLayout timeoutRow=new LinearLayout(this);
+        Button number=new Button(this); styleButton(number,false);
+        Button timeframe=new Button(this); styleButton(timeframe,false);
+        number.setContentDescription("Lock timeout number");
+        timeframe.setContentDescription("Lock timeout time frame");
+        timeoutRow.addView(number,new LinearLayout.LayoutParams(0,-2,1));
+        LinearLayout.LayoutParams right=new LinearLayout.LayoutParams(0,-2,1); right.leftMargin=dp(8);
+        timeoutRow.addView(timeframe,right); page.addView(timeoutRow);
+        Runnable renderTimeout=()->{
+            number.setText(count[0]+" ▾"); timeframe.setText(units[unit[0]]+" ▾");
+            number.setEnabled(!restartOnly.isChecked()); timeframe.setEnabled(!restartOnly.isChecked());
+        };
+        Runnable saveTimeout=()->{
+            WalletPin.prefs(this).edit().putLong("timeout",count[0]*multipliers[unit[0]]).apply();
+            renderTimeout.run(); checkPinLock();
+        };
+        number.setOnClickListener(v->new WalletDialogBuilder().setTitle("Number")
+            .setSingleChoiceItems(counts,count[0]-1,(d,index)->{
+                count[0]=index+1; d.dismiss(); saveTimeout.run();
+            }).show());
+        timeframe.setOnClickListener(v->new WalletDialogBuilder().setTitle("Time frame")
+            .setSingleChoiceItems(units,unit[0],(d,index)->{
+                unit[0]=index; d.dismiss(); saveTimeout.run();
+            }).show());
+        restartOnly.setOnCheckedChangeListener((v,checked)->{
+            WalletPin.prefs(this).edit().putBoolean("restart-only",checked).apply();
+            renderTimeout.run(); checkPinLock();
+        });
+        renderTimeout.run();
+        text("Locks after inactivity, including time spent outside the app. With restart-only enabled, the PIN is required when the app process restarts, not each time you return to it.");
+        button("Home",this::home);
+    }
+    private void pinUpdate(Job job) {
+        if(busy)return; busy=true;
+        new Thread(()->{
+            try { job.run(); runOnUiThread(()->{busy=false; pinSettings(); checkPinLock();}); }
+            catch(Exception e) { runOnUiThread(()->{busy=false; error(e);}); }
+        },"pin-settings").start();
+    }
+    private void backupRecover() {
+        page("Backup/Recover");
+        button(node != null && node.isRemote() ? "Node backup" : "Back up seed", this::backup);
+        if (node == null || !node.isRemote()) button("Test seed recovery", this::testRecovery);
+        button("Create channel backup", this::createChannelBackup);
+        button("Test channel backup", this::testChannelBackup);
+        button("Back", this::advanced);
+    }
+    private List<ReplacementTransaction> replacementCandidates(List<String> unavailable) throws Exception {
+        LightningOuterClass.TransactionDetails transactions = LightningOuterClass.TransactionDetails.parseFrom(
+            node.rpc("getTransactions", LightningOuterClass.GetTransactionsRequest.getDefaultInstance()));
+        LightningOuterClass.ListUnspentResponse coins = LightningOuterClass.ListUnspentResponse.parseFrom(
+            node.rpc("listUnspent", LightningOuterClass.ListUnspentRequest.newBuilder().setMinConfs(0).setMaxConfs(Integer.MAX_VALUE).build()));
+        LightningOuterClass.ListChannelsResponse channels = LightningOuterClass.ListChannelsResponse.parseFrom(
+            node.rpc("listChannels", LightningOuterClass.ListChannelsRequest.getDefaultInstance()));
+        LightningOuterClass.PendingChannelsResponse pending = LightningOuterClass.PendingChannelsResponse.parseFrom(
+            node.rpc("pendingChannels", LightningOuterClass.PendingChannelsRequest.getDefaultInstance()));
+        Set<String> funding = new HashSet<>(), unspent = new HashSet<>();
+        for (LightningOuterClass.Channel c : channels.getChannelsList()) {
+            funding.add(c.getChannelPoint().split(":")[0]);
+            if (c.hasPendingSplice()) funding.add(c.getPendingSplice().getTxid());
+        }
+        for (LightningOuterClass.PendingChannelsResponse.PendingOpenChannel c : pending.getPendingOpenChannelsList()) funding.add(c.getChannel().getChannelPoint().split(":")[0]);
+        for (LightningOuterClass.Utxo coin : coins.getUtxosList()) unspent.add(outpoint(coin));
+        Map<String, LightningOuterClass.Transaction> history = new HashMap<>();
+        for (LightningOuterClass.Transaction tx : transactions.getTransactionsList()) history.put(tx.getTxHash(), tx);
+        Set<String> confirmedSpends = new HashSet<>();
+        for (LightningOuterClass.Transaction tx : transactions.getTransactionsList()) {
+            if (tx.getNumConfirmations() <= 0 || tx.getRawTxHex().isEmpty()) continue;
+            for (ReplacementTransaction.Input input : ReplacementTransaction.parse(ReplacementTransaction.bytes(tx.getRawTxHex())).inputs)
+                confirmedSpends.add(input.txid() + ":" + input.index);
+        }
+        List<ReplacementTransaction> eligible = new ArrayList<>();
+        for (LightningOuterClass.Transaction tx : transactions.getTransactionsList()) {
+            if (tx.getNumConfirmations() != 0 || tx.getAmount() >= 0 || funding.contains(tx.getTxHash())) continue;
+            String submitted = prefs.getString("rbf-submission-" + tx.getTxHash(), "");
+            // CLN can retain an evicted original and its old change as unconfirmed.
+            // A known replacement or a confirmed conflicting spend supersedes it.
+            if (!submitted.isEmpty() && history.containsKey(submitted) && history.get(submitted).getNumConfirmations() >= 0) continue;
+            try {
+                ReplacementTransaction candidate = new ReplacementTransaction(tx, history, unspent, funding);
+                boolean superseded = false;
+                for (ReplacementTransaction.Input input : candidate.original.inputs)
+                    superseded |= confirmedSpends.contains(input.txid() + ":" + input.index);
+                if (!superseded) eligible.add(candidate);
+            }
+            catch (Exception e) { unavailable.add(tx.getTxHash() + "\n" + e.getMessage()); }
+        }
+        return eligible;
+    }
+    private void feeBumps() {
+        page("RBF/CPFP");
+        TextView loading = text("Checking unconfirmed payments…");
+        Button homeButton = button("Home", this::home);
+        LinearLayout origin = page;
+        work(() -> {
+            List<String> unavailable = new ArrayList<>();
+            List<ReplacementTransaction> candidates = replacementCandidates(unavailable);
+            runOnUiThread(() -> {
+                if (page != origin) return;
+                page.removeView(loading);
+                page.removeView(homeButton);
+                if (candidates.isEmpty()) {
+                    text(unavailable.isEmpty() ? "No unconfirmed outgoing payments available."
+                        : "No unconfirmed outgoing payments are eligible for RBF.\n\n" + android.text.TextUtils.join("\n\n", unavailable));
+                    page.addView(homeButton);
+                    return;
+                }
+                text("Select an unconfirmed payment. The replacement keeps its recipients and amounts unchanged; the extra fee comes from wallet change.");
+                RadioGroup choices = new RadioGroup(this); page.addView(choices);
+                final ReplacementTransaction[] selected = {null};
+                for (ReplacementTransaction candidate : candidates) {
+                    RadioButton option = new RadioButton(this); option.setId(View.generateViewId());
+                    option.setText(candidate.txid + "\nCurrent fee: " + candidate.oldFee + " sats · "
+                        + String.format(Locale.US, "%.2f", candidate.oldFee / (double) candidate.original.vbytes) + " sats/vByte");
+                    option.setPadding(0, dp(10), 0, dp(10));
+                    option.setOnCheckedChangeListener((v, checked) -> { if (checked) selected[0] = candidate; });
+                    choices.addView(option);
+                }
+                text("New fee rate (sats/vByte)");
+                EditText rate = field("Enter a higher fee rate", "");
+                rate.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+                rate.setContentDescription("New fee rate in sats per vByte");
+                button("Broadcast", () -> {
+                    try {
+                        if (selected[0] == null) throw new Exception("Select an unconfirmed payment.");
+                        ReplacementTransaction.Plan plan = selected[0].plan(Policy.amount(rate.getText().toString()));
+                        String key = "rbf-submission-" + plan.source.txid;
+                        if (prefs.contains(key)) throw new Exception("A replacement was already submitted for this transaction. Check payment history before retrying. Expected transaction: " + prefs.getString(key, ""));
+                        confirmAction("Broadcast replacement?", "New fee rate: " + plan.rate + " sats/vByte\nTotal replacement fee: " + plan.fee
+                            + " sats\nAdditional fee: " + (plan.fee - plan.source.oldFee) + " sats\nRecipient amounts stay unchanged." + (plan.source.signalsRbf ? "" : "\nThis transaction needs full-RBF relay support because it did not signal replacement when sent."), "Broadcast", () -> work(() -> {
+                                ReplacementTransaction fresh = null;
+                                for (ReplacementTransaction candidate : replacementCandidates(new ArrayList<>()))
+                                    if (candidate.txid.equals(plan.source.txid)) fresh = candidate;
+                                if (fresh == null) throw new Exception("The payment confirmed, was replaced, or its change is no longer available. Reopen RBF/CPFP.");
+                                ReplacementTransaction.Plan checked = fresh.plan(plan.rate);
+                                if (!Arrays.equals(checked.unsigned, plan.unsigned)) throw new Exception("Transaction details changed. Review again.");
+                                if (prefs.contains(key)) throw new Exception("A replacement request is already recorded. Check payment history.");
+                                byte[] signed = node.signReplacement(checked);
+                                String expected = ReplacementTransaction.txid(checked.unsigned);
+                                // Record before a network submission; a timeout must not look like a safe retry.
+                                if (!prefs.edit().putString(key, expected).commit()) throw new Exception("Could not save the replacement request. Nothing broadcast.");
+                                try {
+                                    String txid = node.publishReplacement(signed, checked);
+                                    prefs.edit().putString("tx-label-" + txid, prefs.getString("tx-label-" + plan.source.txid, "")).apply();
+                                    runOnUiThread(() -> { page("Replacement broadcast"); text("Transaction\n" + txid); button("Payment history", this::paymentHistory); button("Home", this::home); });
+                                } catch (Exception e) {
+                                    throw new Exception("Replacement submission needs checking: " + e.getMessage() + "\nExpected transaction: " + expected + "\nCheck payment history before retrying.", e);
+                                }
+                            }));
+                    } catch (Exception e) { error(e); }
+                });
+                if (!unavailable.isEmpty()) text("Other unconfirmed payments cannot be replaced:\n" + android.text.TextUtils.join("\n\n", unavailable));
+                page.addView(homeButton);
+            });
+        });
+    }
+    private void customization() {
+        page("Customization");
+        Switch coin=new Switch(this);
+        coin.setText("Show coin"); coin.setTextSize(15); coin.setTextColor(0xffedddbc);
+        coin.setPadding(dp(14),dp(12),dp(14),dp(12)); coin.setMinimumHeight(dp(52));
+        coin.setChecked(prefs.getBoolean("header-show-coin",true));
+        coin.setOnCheckedChangeListener((view,checked)->{
+            prefs.edit().putBoolean("header-show-coin",checked).apply();
+            headerRateViewport.setTranslationX(checked ? dp(47) : 0);
+            headerBrand.invalidate();
+        });
+        page.addView(coin,new LinearLayout.LayoutParams(-1,-2));
+        Switch receivable = new Switch(this);
+        receivable.setText("Show Receivable");
+        receivable.setTextSize(15);
+        receivable.setTextColor(0xffedddbc);
+        receivable.setPadding(dp(14), dp(12), dp(14), dp(12));
+        receivable.setMinimumHeight(dp(52));
+        receivable.setChecked(prefs.getBoolean("home-show-receivable", false));
+        receivable.setOnCheckedChangeListener((view, checked) ->
+            prefs.edit().putBoolean("home-show-receivable", checked).apply());
+        page.addView(receivable, new LinearLayout.LayoutParams(-1, -2));
+        button("Back", this::advanced);
     }
     private void createBolt12() {
         page("Create BOLT12");
@@ -2247,8 +2848,10 @@ public final class MainActivity extends Activity {
     }
     private static final class HistoryEntry {
         final String labelKey, fallbackLabel, details;
-        HistoryEntry(String labelKey, String fallbackLabel, String details) {
+        final int direction;
+        HistoryEntry(String labelKey, String fallbackLabel, String details, int direction) {
             this.labelKey = labelKey; this.fallbackLabel = fallbackLabel; this.details = details;
+            this.direction = direction;
         }
     }
     private void editHistoryLabel(HistoryEntry entry, Runnable refresh) {
@@ -2276,14 +2879,14 @@ public final class MainActivity extends Activity {
             for (LightningOuterClass.Transaction tx : transactions.getTransactionsList()) {
                 String direction = tx.getAmount() > 0 ? "On-chain received" : tx.getAmount() < 0 ? "On-chain sent / channel funding" : "On-chain transaction";
                 String status = tx.getNumConfirmations() < 0 ? "Conflicted" : tx.getNumConfirmations() == 0 ? "Unconfirmed" : tx.getNumConfirmations() + " confirmations";
-                onChain.computeIfAbsent(tx.getTimeStamp(), key -> new ArrayList<>()).add(new HistoryEntry("tx-label-" + tx.getTxHash(), transactionHistoryLabel(tx), direction + " · " + displayAmount(Math.abs(tx.getAmount())) + "\n" + status + "\n" + tx.getTxHash()));
+                onChain.computeIfAbsent(tx.getTimeStamp(), key -> new ArrayList<>()).add(new HistoryEntry("tx-label-" + tx.getTxHash(), transactionHistoryLabel(tx), direction + " · " + displayAmount(Math.abs(tx.getAmount())) + "\n" + status + "\n" + tx.getTxHash(), Long.compare(tx.getAmount(), 0)));
             }
             for (LightningOuterClass.Payment p : payments.getPaymentsList())
-                lightning.computeIfAbsent(p.getCreationTimeNs() / 1000000000L, key -> new ArrayList<>()).add(new HistoryEntry("payment-label-" + p.getPaymentHash(), "", "Lightning sent · " + displayAmount(p.getValueSat()) + "\n" + p.getStatus().name() + "\n" + p.getPaymentHash()));
+                lightning.computeIfAbsent(p.getCreationTimeNs() / 1000000000L, key -> new ArrayList<>()).add(new HistoryEntry("payment-label-" + p.getPaymentHash(), "", "Lightning sent · " + displayAmount(p.getValueSat()) + "\n" + p.getStatus().name() + "\n" + p.getPaymentHash(), -1));
             for (LightningOuterClass.Invoice invoice : invoices.getInvoicesList()) {
                 if (invoice.getState() != LightningOuterClass.Invoice.InvoiceState.SETTLED) continue;
                 lightning.computeIfAbsent(invoice.getSettleDate(), key -> new ArrayList<>()).add(new HistoryEntry("invoice-label-" + android.util.Base64.encodeToString(invoice.getRHash().toByteArray(), android.util.Base64.NO_WRAP), "",
-                    "Lightning received · " + displayAmount(invoice.getAmtPaidSat()) + "\nSettled" + (invoice.getMemo().isEmpty() ? "" : "\nDescription: " + invoice.getMemo())));
+                    "Lightning received · " + displayAmount(invoice.getAmtPaidSat()) + "\nSettled" + (invoice.getMemo().isEmpty() ? "" : "\nDescription: " + invoice.getMemo()), 1));
             }
             boolean limited = payments.getPaymentsCount() == 100 || invoices.getInvoicesCount() == 100;
             runOnUiThread(() -> renderPaymentHistory(onChain, lightning, limited));
@@ -2293,19 +2896,30 @@ public final class MainActivity extends Activity {
             NavigableMap<Long, List<HistoryEntry>> lightning, boolean limited) {
         page("Payment history");
         LinearLayout tabs = new LinearLayout(this);
-        String[] names = {"ALL", "Lightning", "On Chain"};
+        String[] names = {"ALL", "Lightning", "On Chain", "Home"};
         for (int i = 0; i < names.length; i++) {
             final int tab = i;
             Button button = new Button(this); styleButton(button, historyTab == i); button.setText(names[i]); button.setTextSize(13);
             button.setSelected(historyTab == i);
-            button.setTypeface(null, historyTab == i ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
-            button.setTextColor(historyTab == i ? 0xff101b16 : 0xffafbeb6);
+            button.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), historyTab == i ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+            button.setTextColor(historyTab == i ? 0xfff5e7ce : 0xffc2b69f);
             button.setContentDescription(names[i] + (historyTab == i ? ", selected" : ""));
-            button.setOnClickListener(v -> { historyTab = tab; renderPaymentHistory(onChain, lightning, limited); });
+            button.setPadding(dp(4), dp(12), dp(4), dp(12));
+            button.setOnClickListener(v -> {
+                if (tab == 3) { home(); return; }
+                historyTab = tab; renderPaymentHistory(onChain, lightning, limited);
+            });
             LinearLayout.LayoutParams tabSize = new LinearLayout.LayoutParams(0, -2, 1); tabSize.setMargins(dp(2), 0, dp(2), dp(8));
             tabs.addView(button, tabSize);
         }
         page.addView(tabs);
+        // Keep the original layout slot, but pin the controls at the viewport's
+        // top once the heading scrolls away. Elevation keeps entries beneath it.
+        tabs.setBackground(new PaperBackgroundDrawable());
+        tabs.setElevation(dp(8));
+        ScrollView historyScroll = pageScroll;
+        historyScroll.setOnScrollChangeListener((v, x, y, oldX, oldY) ->
+            tabs.setTranslationY(Math.max(0, y - tabs.getTop())));
         text("Tap a payment to edit its label.");
         NavigableMap<Long, List<HistoryEntry>> history = new TreeMap<>(Collections.reverseOrder());
         if (historyTab != 1) for (Map.Entry<Long, List<HistoryEntry>> entry : onChain.entrySet())
@@ -2317,13 +2931,20 @@ public final class MainActivity extends Activity {
         for (Map.Entry<Long, List<HistoryEntry>> entry : history.entrySet())
             for (HistoryEntry item : entry.getValue()) {
                 String label = prefs.getString(item.labelKey, item.fallbackLabel);
-                Button row = button((entry.getKey() > 0 ? date.format(new Date(entry.getKey() * 1000)) : "Date unavailable") + "\n" + historyLabel(label) + item.details,
+                Button row = button((entry.getKey() > 0 ? date.format(new Date(entry.getKey() * 1000)) + "\n" : "") + historyLabel(label) + item.details,
                     () -> editHistoryLabel(item, () -> renderPaymentHistory(onChain, lightning, limited)));
+                if (item.direction != 0) {
+                    // The paper surface supplies a soft diagonal wash and fine grain.
+                    int tint = item.direction > 0 ? 0xff253a2d : 0xff422b2b;
+                    int rim = item.direction > 0 ? 0xff536b50 : 0xff795650;
+                    row.setBackground(new android.graphics.drawable.RippleDrawable(
+                        android.content.res.ColorStateList.valueOf(0x33e1b879), surface(tint, 14, rim), null));
+                }
                 row.setAllCaps(false); row.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
                 row.setContentDescription(row.getText() + ". Tap to edit label.");
             }
         if (limited && historyTab != 2) text("Showing the latest 100 outgoing Lightning payments and latest 100 invoices.");
-        button("Refresh", this::paymentHistory); button("Back", this::home);
+        button("Back", this::home);
     }
     private void backup() {
         if (node != null && node.isRemote()) { error(new Exception("Back up the seed and channels on your remote node. This phone holds connection credentials, not its seed.")); return; }
@@ -2344,10 +2965,114 @@ public final class MainActivity extends Activity {
             text("Write these words down privately. The seed recovers on-chain funds; it is not a complete Lightning channel backup."); button("Done", this::home);
         } catch (Exception e) { error(e); }
     }
+    private static final int SAVE_CHANNEL_BACKUP = 6041, TEST_CHANNEL_BACKUP = 6042;
+    private String pendingBackupName, backupOperationProfile;
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString("pending-backup-name", pendingBackupName);
+        state.putString("backup-operation-profile", backupOperationProfile);
+    }
+    private void clearPendingBackup() {
+        if (pendingBackupName != null && pendingBackupName.matches("channel-backup-[a-f0-9-]+\\.pending"))
+            new java.io.File(getCacheDir(), pendingBackupName).delete();
+        pendingBackupName = null; backupOperationProfile = null;
+    }
+    private void createChannelBackup() {
+        page("Create channel backup", true);
+        TextView warning = text("Warning: if recovering this wallet, this will allow you to rediscover the channels you had and will trigger their closure. If you lose your wallet and have no channel backup, you must hope that your channel peers close channels themselves so that your funds end up in your on chain wallet.");
+        warning.setTextColor(0xffff7373);
+        text("Recovery still depends on your peers responding. Keep the matching seed or node secret as well as this backup. Create a fresh backup after opening, closing or splicing channels, and save it somewhere separate from this phone.");
+        if (node != null && node.isRemote())
+            text("This exports the remote CLN node’s static channel backup, not its seed or hsm_secret. Keep your Start9/node backup too. The exported file contains private channel details; store it privately.");
+        else text("The file uses LND’s encrypted channel.backup format. It helps recover funds by closing channels; it does not restore live channels. Recovery import is not yet available in this app.");
+        button("Create channel backup", () -> work(() -> {
+            ChannelBackupFile.Export backup = node.exportChannelBackup();
+            final String sourceProfile = profile;
+            if (backup.channels == 0) {
+                runOnUiThread(() -> { page("Create channel backup", true); text("No channels to back up."); button("Home", this::home); });
+                return;
+            }
+            clearPendingBackup();
+            String name = "channel-backup-" + UUID.randomUUID() + ".pending";
+            java.io.File temporary = new java.io.File(getCacheDir(), name);
+            try (java.io.FileOutputStream output = new java.io.FileOutputStream(temporary)) {
+                output.write(backup.data); output.getFD().sync();
+            }
+            runOnUiThread(() -> {
+                if (isDestroyed() || !sourceProfile.equals(profile)) { temporary.delete(); return; }
+                pendingBackupName = name; backupOperationProfile = sourceProfile;
+                Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(backup.extension.equals("json") ? "application/json" : "application/octet-stream")
+                    .putExtra(Intent.EXTRA_TITLE, "xbt-channel-backup-" + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(new Date()) + "." + backup.extension);
+                try { startActivityForResult(save, SAVE_CHANNEL_BACKUP); }
+                catch (Exception e) { clearPendingBackup(); error(e); }
+            });
+        }));
+        button("Home", this::home);
+    }
+    private void testChannelBackup() {
+        page("Test channel backup", true);
+        text("Choose the backup file you saved. This test never restores a backup or closes channels.");
+        text(node != null && node.isRemote()
+            ? "For CLN, this checks the file checksum, node identity and matching entries in the node’s current static backup. It cannot prove recovery from an older backup."
+            : "This checks whether the backup decrypts with this wallet’s keys and covers its current channels. It does not prove that peers will respond during recovery.");
+        button("Choose channel backup", () -> {
+            backupOperationProfile = profile;
+            Intent select = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+            try { startActivityForResult(select, TEST_CHANNEL_BACKUP); }
+            catch (Exception e) { backupOperationProfile = null; error(e); }
+        });
+        button("Home", this::home);
+    }
+    private void channelBackupResult(int request, int result, Intent data) {
+        if (result != RESULT_OK || data == null || data.getData() == null) { clearPendingBackup(); return; }
+        if (!profile.equals(backupOperationProfile)) {
+            clearPendingBackup(); error(new Exception("The selected wallet changed. Start the backup operation again.")); return;
+        }
+        android.net.Uri uri = data.getData();
+        if (request == SAVE_CHANNEL_BACKUP) {
+            if (pendingBackupName == null || !pendingBackupName.matches("channel-backup-[a-f0-9-]+\\.pending")) {
+                clearPendingBackup(); error(new Exception("The prepared backup is unavailable. Create it again.")); return;
+            }
+            java.io.File temporary = new java.io.File(getCacheDir(), pendingBackupName);
+            busy = true;
+            new Thread(() -> {
+                try {
+                    byte[] bytes;
+                    try (java.io.InputStream input = new java.io.FileInputStream(temporary)) { bytes = ChannelBackupFile.read(input); }
+                    try (java.io.OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
+                        if (output == null) throw new Exception("Could not open the destination file.");
+                        output.write(bytes); output.flush();
+                    }
+                    runOnUiThread(() -> {
+                        busy = false; clearPendingBackup();
+                        if (isDestroyed()) return;
+                        page("Channel backup saved", true); text("Your channel backup was saved. Keep it with your recovery records, separate from this phone.");
+                        button("Test channel backup", this::testChannelBackup); button("Home", this::home);
+                    });
+                } catch (Exception e) { runOnUiThread(() -> {
+                    busy = false; clearPendingBackup();
+                    if (!isDestroyed()) error(new Exception("Could not finish saving the backup: " + e.getMessage() + ". The destination may contain an incomplete file; create the backup again.", e));
+                }); }
+            }, "save-channel-backup").start();
+            return;
+        }
+        backupOperationProfile = null;
+        if (node == null || !node.rpcReady) { error(new Exception("Wait for the wallet to connect, then choose the backup file again.")); return; }
+        work(() -> {
+            final byte[] bytes;
+            try (java.io.InputStream input = getContentResolver().openInputStream(uri)) { bytes = ChannelBackupFile.read(input); }
+            String report = node.testChannelBackup(bytes);
+            runOnUiThread(() -> {
+                page("Channel backup checked", true); text(report);
+                button("Create channel backup", this::createChannelBackup); button("Home", this::home);
+            });
+        });
+    }
     private void testRecovery() {
         try {
             String saved = new Vault(this, profile).get("seed");
-            page("Test recovery", true);
+            page("Test seed recovery", true);
             if (saved == null) { text("Create your wallet first."); button("Back", this::home); return; }
             text("Enter the words from your backup in order. This checks them against this wallet's seed; it does not restore a wallet or test Lightning channel recovery.");
             int count = saved.trim().split("\\s+").length;
@@ -2790,8 +3515,8 @@ public final class MainActivity extends Activity {
             final boolean[] expanded = {false};
             Button toggle = button("Expiration (default 1hr) ▾", () -> {});
             toggle.setBackground(null); toggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-            toggle.setTextColor(0xffafbeb6);
-            toggle.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.NORMAL);
+            toggle.setTextColor(0xffc2b69f);
+            toggle.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.NORMAL);
             count = field("Number", prefs.getString("receive-expiration-count", "1"));
             page.removeView(count);
             count.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
@@ -2831,8 +3556,62 @@ public final class MainActivity extends Activity {
         }
         long seconds() { return InvoiceExpiration.seconds(count.getText().toString(), unit); }
     }
+    private final class InvoiceRoutingEntry {
+        final CheckBox hints = new CheckBox(MainActivity.this);
+        final CheckBox blinded = new CheckBox(MainActivity.this);
+        InvoiceRoutingEntry() {
+            LinearLayout fields = new LinearLayout(MainActivity.this);
+            fields.setOrientation(LinearLayout.VERTICAL);
+            Button toggle = button("Advanced ▾", () -> {});
+            toggle.setBackground(null); toggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            toggle.setTextColor(0xffc2b69f);
+            toggle.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.NORMAL);
+            hints.setText("Include route hints"); hints.setChecked(true);
+            blinded.setText("Blinded paths"); blinded.setChecked(false);
+            fields.addView(hints); fields.addView(blinded);
+            hints.setOnCheckedChangeListener((v, checked) -> { if (checked) blinded.setChecked(false); });
+            blinded.setOnCheckedChangeListener((v, checked) -> { if (checked) hints.setChecked(false); });
+            if (node != null && node.isRemote()) {
+                blinded.setEnabled(false);
+                TextView explanation = new TextView(MainActivity.this);
+                explanation.setText("Blinded paths are not supported by this remote node’s BOLT11 invoice API.");
+                explanation.setTextColor(0xffc2b69f);
+                fields.addView(explanation);
+            }
+            fields.setVisibility(View.GONE); fields.setAlpha(0f);
+            page.addView(fields, new LinearLayout.LayoutParams(-1, -2));
+            final boolean[] expanded = {false};
+            toggle.setOnClickListener(v -> {
+                expanded[0] = !expanded[0];
+                toggle.setText("Advanced " + (expanded[0] ? "▴" : "▾"));
+                animateExpandable("invoice-routing", fields, expanded[0]);
+            });
+        }
+    }
     private void receiveLightning() {
         page("Receive Lightning");
+        Switch swaps = new Switch(this);
+        LinearLayout swapToggle = new LinearLayout(this); swapToggle.setGravity(Gravity.CENTER_VERTICAL);
+        swapToggle.addView(swaps);
+        TextView swapsLabel = new TextView(this); swapsLabel.setText("Swaps"); swapsLabel.setTextColor(0xffe0c18c);
+        swapsLabel.setPadding(dp(6), 0, 0, 0); swapsLabel.setOnClickListener(v -> swaps.performClick());
+        swapToggle.addView(swapsLabel);
+        swaps.setContentDescription("Swaps — receive BTC as XBT");
+        FrameLayout.LayoutParams toggleSize = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.CENTER_VERTICAL);
+        pageHeader.addView(swapToggle, toggleSize);
+        swaps.setChecked(prefs.getBoolean("receive-lightning-swaps", false));
+        final org.json.JSONObject pendingSwap;
+        try { pendingSwap=pendingSwapReceive(); }
+        catch (Exception e) { error(e); return; }
+        if (swaps.isChecked() && pendingSwap!=null) {
+            swaps.setOnCheckedChangeListener((v,enabled) -> {
+                prefs.edit().putBoolean("receive-lightning-swaps",enabled).apply();
+                receiveLightning();
+            });
+            button("Existing swap", () -> showSwapReceive(pendingSwap));
+            button("Cancel swap", () -> cancelSwapReceive(pendingSwap));
+            return;
+        }
         TextView receiveLimit = text("Checking incoming liquidity…");
         receiveLimit.setTextColor(0xffff7373);
         final Long[] largestInbound = {null};
@@ -2841,6 +3620,7 @@ public final class MainActivity extends Activity {
             String value = displayUnit() == 2 && amountPrice() == null
                 ? String.format(Locale.US, "%,d sats", largestInbound[0]) : displayAmount(largestInbound[0]);
             receiveLimit.setText("The largest amount you can receive in one Lightning payment is " + value);
+            receiveLimit.setContentDescription("Largest incoming Lightning payment: " + value + ". Tap to cycle sats, XBT and fiat.");
         };
         if (node != null) node.io.execute(() -> {
             try {
@@ -2859,17 +3639,11 @@ public final class MainActivity extends Activity {
                 });
             }
         });
-        Switch swaps = new Switch(this);
-        LinearLayout swapToggle = new LinearLayout(this); swapToggle.setGravity(Gravity.CENTER_VERTICAL);
-        swapToggle.addView(swaps);
-        TextView swapsLabel = new TextView(this); swapsLabel.setText("Swaps"); swapsLabel.setTextColor(0xffa8efd5);
-        swapsLabel.setPadding(dp(6), 0, 0, 0); swapsLabel.setOnClickListener(v -> swaps.performClick());
-        swapToggle.addView(swapsLabel);
-        swaps.setContentDescription("Swaps — receive BTC as XBT");
-        FrameLayout.LayoutParams toggleSize = new FrameLayout.LayoutParams(-2, -2, Gravity.END | Gravity.CENTER_VERTICAL);
-        pageHeader.addView(swapToggle, toggleSize);
         AmountEntry entry = new AmountEntry("Amount", "Optional");
         entry.changed = showReceiveLimit;
+        receiveLimit.setContentDescription("Largest incoming Lightning payment. Tap to cycle sats, XBT and fiat.");
+        receiveLimit.setMinHeight(dp(48));
+        receiveLimit.setOnClickListener(v -> entry.currency.performClick());
         TextView amountTitle = entry.title;
         EditText amount = entry.input;
         text("Description");
@@ -2881,6 +3655,7 @@ public final class MainActivity extends Activity {
         privateLabel.setSingleLine(false); privateLabel.setMaxLines(3);
         privateLabel.setContentDescription("Label Optional - for your own records");
         ExpirationEntry expiration = new ExpirationEntry();
+        InvoiceRoutingEntry routing = new InvoiceRoutingEntry();
         Button controller = button("Select swap controller", () -> {
             try {
                 org.json.JSONArray saved = savedControllers(); java.util.List<org.json.JSONObject> available = new ArrayList<>();
@@ -2901,15 +3676,7 @@ public final class MainActivity extends Activity {
         });
         controller.setVisibility(View.GONE);
         Button receipts = button("Swap requests", this::swapReceipts); receipts.setVisibility(View.GONE);
-        swaps.setOnCheckedChangeListener((v,enabled) -> {
-            prefs.edit().putBoolean("receive-lightning-swaps", enabled).apply();
-            amountTitle.setText("Amount");
-            setFieldHint(amount, enabled ? "Required for swaps" : "Optional");
-            setFieldHint(memo, enabled ? "Optional - for your XBT invoice" : "Optional - sender can see this");
-            controller.setVisibility(enabled ? View.VISIBLE : View.GONE); receipts.setVisibility(enabled ? View.VISIBLE : View.GONE);
-        });
-        swaps.setChecked(prefs.getBoolean("receive-lightning-swaps", false));
-        button("Create invoice", () -> {
+        Button createInvoice = button("Create invoice", () -> {
             final long sats, expirySeconds;
             try {
                 expirySeconds = expiration.seconds();
@@ -2920,10 +3687,11 @@ public final class MainActivity extends Activity {
             catch (Exception e) { error(e); return; }
             final String description = memo.getText().toString().trim();
             final String invoiceLabel = privateLabel.getText().toString().trim();
-            if (swaps.isChecked()) { createSwapReceive(sats, description, invoiceLabel, expirySeconds); return; }
+            final boolean includeHints = routing.hints.isChecked(), blindedPaths = routing.blinded.isChecked();
+            if (swaps.isChecked()) { createSwapReceive(sats, description, invoiceLabel, expirySeconds, includeHints, blindedPaths); return; }
             work(() -> {
                 LightningOuterClass.AddInvoiceResponse result = LightningOuterClass.AddInvoiceResponse.parseFrom(node.rpc("addInvoice",
-                    LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(expirySeconds).setPrivate(true).build()));
+                    LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(expirySeconds).setPrivate(includeHints).setIsBlinded(blindedPaths).build()));
                 if (!prefs.edit().putString("invoice-label-" + android.util.Base64.encodeToString(result.getRHash().toByteArray(), android.util.Base64.NO_WRAP), invoiceLabel).commit())
                     throw new Exception("Could not save invoice label.");
                 String invoice = result.getPaymentRequest();
@@ -2939,10 +3707,24 @@ public final class MainActivity extends Activity {
                         getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Lightning invoice", invoice));
                         Toast.makeText(this, "Invoice copied", Toast.LENGTH_SHORT).show();
                     });
-                    text(invoice); button("Home", this::home);
+                    copyableInvoice(invoice); button("Home", this::home);
                 });
             });
         });
+        swaps.setOnCheckedChangeListener((v,enabled) -> {
+            prefs.edit().putBoolean("receive-lightning-swaps", enabled).apply();
+            if (enabled && pendingSwap!=null) { receiveLightning(); return; }
+            createInvoice.setText(enabled ? "Create invoice (swap)" : "Create invoice");
+            amountTitle.setText("Amount");
+            setFieldHint(amount, enabled ? "Required for swaps" : "Optional");
+            setFieldHint(memo, enabled ? "Optional - for your XBT invoice" : "Optional - sender can see this");
+            controller.setVisibility(enabled ? View.VISIBLE : View.GONE); receipts.setVisibility(enabled ? View.VISIBLE : View.GONE);
+        });
+        createInvoice.setText(swaps.isChecked() ? "Create invoice (swap)" : "Create invoice");
+        setFieldHint(amount, swaps.isChecked() ? "Required for swaps" : "Optional");
+        setFieldHint(memo, swaps.isChecked() ? "Optional - for your XBT invoice" : "Optional - sender can see this");
+        controller.setVisibility(swaps.isChecked() ? View.VISIBLE : View.GONE);
+        receipts.setVisibility(swaps.isChecked() ? View.VISIBLE : View.GONE);
         button("Home", this::home);
     }
     private void saveSwapSend(org.json.JSONObject record) throws Exception {
@@ -2960,6 +3742,8 @@ public final class MainActivity extends Activity {
         if (prefs.contains("swap-send-" + hash)) {
             record = new org.json.JSONObject(prefs.getString("swap-send-" + hash, "{}"));
             if (!raw.equals(record.getString("recipient_invoice"))) throw new Exception("This payment hash already belongs to another saved invoice. Check Outgoing swaps.");
+            SwapSend.reopenUncreated(record,prefs.contains("payment-"+hash));
+            saveSwapSend(record);
         } else {
             String provider = prefs.getString("receive-provider", ""), api = prefs.getString("receive-api-" + provider, "");
             if (api.isEmpty() || prefs.getString("receive-key-" + provider, "").isEmpty())
@@ -2978,7 +3762,21 @@ public final class MainActivity extends Activity {
     }
     private void requestSwapSend(org.json.JSONObject record, String action) throws Exception {
         record.remove("last_error");
+        if (record.optBoolean("dismissed")) throw new Exception("This swap request was dismissed.");
+        if (action.equals("cancel")) {
+            if (prefs.contains("payment-"+record.optString("hash"))) throw new Exception("A payment was already attempted. Check payment history and swap status before taking further action.");
+            record.put("cancel_pending",true); saveSwapSend(record);
+        }
+
         try {
+            if (action.equals("cancel") && record.optJSONObject("reply")==null) {
+                // A failed quote response does not establish whether it was recorded.
+                // Status is read-only; never create/retry a quote during cancellation.
+                requestSwapSend(record,"status");
+                if (record.has("last_error")) throw new Exception(record.getString("last_error"));
+                if (!record.getJSONObject("reply").optBoolean("terminal")) requestSwapSend(record,"cancel");
+                return;
+            }
             String api = record.getString("api"); prepareControllerTransport(api);
             org.json.JSONObject request = new org.json.JSONObject().put("action", action).put("invoice", record.getString("recipient_invoice"))
                 .put("environment", record.getString("environment")).put("provider", record.getString("provider"));
@@ -2987,15 +3785,21 @@ public final class MainActivity extends Activity {
             LightningOuterClass.PayReq decoded = reply.has("invoice") ? LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq",
                 LightningOuterClass.PayReqString.newBuilder().setPayReq(reply.getString("invoice")).build())) : null;
             SwapSend.validate(record, reply, decoded);
-            record.put("reply", reply);
+            record.put("reply", reply); record.remove("cancel_pending");
             if (!reply.optBoolean("terminal") && System.currentTimeMillis() - record.optLong("market_checked") >= 60000) {
                 record.put("market_checked", System.currentTimeMillis()); record.remove("market_error");
                 try { record.put("market", FiatRates.swapMarket(controllerTor(api))); }
                 catch (Exception e) { record.put("market_error", e.getMessage() == null ? "Market price unavailable" : e.getMessage()); }
             }
-        } catch (Exception e) { record.put("last_error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()); }
+        } catch (Exception e) {
+            record.put("last_error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+            if (action.equals("cancel")) SwapSend.dismissUncreatedCancellation(record,
+                prefs.contains("payment-"+record.optString("hash")),e.getMessage());
+        }
         saveSwapSend(record);
-        runOnUiThread(() -> { if (screen.equals("Review BTC swap") && record.optString("hash").equals(viewingSendHash)) showSwapSend(record); });
+        runOnUiThread(() -> { if (screen.equals("Review BTC swap") && record.optString("hash").equals(viewingSendHash)) {
+            if (record.optBoolean("dismissed")) outgoingSwaps(); else showSwapSend(record);
+        } });
     }
     private String swapFeeText(org.json.JSONObject reply) {
         try {
@@ -3021,12 +3825,18 @@ public final class MainActivity extends Activity {
         } catch (Exception e) { return "Warning: market comparison unavailable. " + (e.getMessage() == null ? "No fresh price." : e.getMessage()); }
     }
     private void showSwapSend(org.json.JSONObject record) {
+        boolean refreshing=screen.equals("Review BTC swap") && record.optString("hash").equals(viewingSendHash);
+        int previousScroll=refreshing && pageScroll!=null ? pageScroll.getScrollY() : 0;
         page("Review BTC swap"); viewingSendHash = record.optString("hash");
+        if (refreshing && pageTitle!=null) {
+            if (onboardingReveal!=null) { onboardingReveal.cancel(); onboardingReveal=null; }
+            pageTitle.setReveal(1f);
+        }
         text("Recipient receives: " + SwapSend.sats(record.optLong("btc_msat")) + " BTC sats");
         text("Recipient: " + record.optString("recipient"));
         text("Provider: " + record.optString("provider"));
         org.json.JSONObject reply = record.optJSONObject("reply");
-        if (record.has("last_error")) text("Swap request failed: " + record.optString("last_error") + "\nCheck this saved request before retrying. A failed reply does not establish whether the controller accepted it.");
+        if (record.has("last_error")) copyableError("Swap request failed: " + record.optString("last_error") + "\nCheck this saved request before retrying. A failed reply does not establish whether the controller accepted it.");
         if (reply != null) {
             text("Status: " + reply.optString("state").replace('_', ' '));
             text("You pay: " + amountReview(reply.optLong("xbt_msat"), amountPrice()));
@@ -3035,18 +3845,24 @@ public final class MainActivity extends Activity {
             if (prefs.contains("payment-" + record.optString("hash"))) {
                 text("Wallet payment: " + prefs.getString("payment-" + record.optString("hash"), "unknown") + ". Check payment history; this request will not be paid again automatically.");
                 button("Payment history", this::paymentHistory);
-            } else if (!reply.optBoolean("terminal") && !reply.optBoolean("blocked") && reply.optLong("expires_at") > System.currentTimeMillis()/1000) {
+            } else if (!reply.optBoolean("terminal") && !reply.optBoolean("blocked") && !reply.optBoolean("cancel_requested") && !record.optBoolean("cancel_pending") && reply.optLong("expires_at") > System.currentTimeMillis()/1000) {
                 if (!reply.optBoolean("approved")) {
                     button("Accept quote", () -> updateSwapSend(record.optString("hash"), "accept"));
-                    button("Cancel quote", () -> updateSwapSend(record.optString("hash"), "cancel"));
+
                 } else if (reply.has("invoice") && !record.has("last_error")) {
                     button("Review payment", () -> reviewSwapSendPayment(record.optString("hash")));
                 } else text("Preparing your XBT payment invoice…");
             }
-        } else text("Requesting a quote. No payment has been sent.");
-        button("Check status", () -> updateSwapSend(record.optString("hash"), "status"));
-        if (reply == null) button("Retry quote", () -> updateSwapSend(record.optString("hash"), "quote"));
+            if (reply.optBoolean("cancel_requested") || record.optBoolean("cancel_pending")) text("Cancelling… Waiting for the controller to confirm cleanup.");
+        } else text(record.optBoolean("dismissed") ? "Not created. This request was dismissed." : "No quote is available yet. No payment has been sent.");
+        if (SwapSend.canCancel(record,prefs.contains("payment-"+record.optString("hash"))))
+            button(record.optBoolean("cancel_pending") ? "Retry cancellation" : "Cancel swap", () -> confirmAction("Cancel swap?", "The controller will be checked first. If it never created this swap, the request will be dismissed. An issued invoice may need to expire before cancellation completes.", "Cancel swap", () -> updateSwapSend(record.optString("hash"), "cancel")));
+        if (!record.optBoolean("dismissed")) {
+            button("Check status", () -> updateSwapSend(record.optString("hash"), "status"));
+            if (reply == null && !record.optBoolean("cancel_pending")) button("Retry quote", () -> updateSwapSend(record.optString("hash"), "quote"));
+        }
         button("Outgoing swaps", this::outgoingSwaps); button("Home", this::home);
+        if (refreshing) restorePageScroll(previousScroll);
     }
     private void outgoingSwaps() {
         page("Outgoing swaps");
@@ -3056,7 +3872,15 @@ public final class MainActivity extends Activity {
             records.sort((a,b) -> Long.compare(b.optLong("created"), a.optLong("created")));
             for (org.json.JSONObject r : records) {
                 org.json.JSONObject reply = r.optJSONObject("reply");
-                button(SwapSend.sats(r.optLong("btc_msat")) + " BTC sats · " + (reply == null ? "Request pending" : reply.optString("state")), () -> showSwapSend(r));
+                String hash=r.optString("hash");
+                button(SwapSend.sats(r.optLong("btc_msat")) + " BTC sats · " + SwapSend.historyState(r,prefs.getString("payment-"+hash,"")), () -> {
+                    try {
+                        org.json.JSONObject fresh=new org.json.JSONObject(prefs.getString("swap-send-"+hash,"{}"));
+                        showSwapSend(fresh);
+                        org.json.JSONObject current=fresh.optJSONObject("reply");
+                        if (current!=null && !current.optBoolean("terminal")) updateSwapSend(hash,"status");
+                    } catch (Exception e) { error(e); }
+                });
             }
             if (records.isEmpty()) text("No outgoing swaps yet.");
         } catch (Exception e) { error(e); }
@@ -3086,18 +3910,30 @@ public final class MainActivity extends Activity {
             })));
         });
     }
-    private void createSwapReceive(long sats, String description, String label, long expirySeconds) {
+    private org.json.JSONObject pendingSwapReceive() throws Exception {
+        org.json.JSONObject latest=null;
+        for (String name:prefs.getAll().keySet()) if (name.startsWith("swap-receive-")) {
+            org.json.JSONObject saved=new org.json.JSONObject(prefs.getString(name,"{}"));
+            if (SwapReceive.inProgress(saved) && (latest==null || saved.optLong("created")>latest.optLong("created"))) latest=saved;
+        }
+        return latest;
+    }
+    private void cancelSwapReceive(org.json.JSONObject record) {
+        confirmAction("Cancel swap?",
+            "The controller will check whether this swap can still be cancelled. Cancellation is complete only after the controller confirms it. An issued invoice may need to expire first.",
+            "Cancel swap", () -> {
+                showSwapReceive(record);
+                work(() -> requestSwapReceive(new org.json.JSONObject(prefs.getString("swap-receive-"+record.getString("hash"),"{}")), "cancel"));
+            });
+    }
+    private void createSwapReceive(long sats, String description, String label, long expirySeconds, boolean includeHints, boolean blindedPaths) {
         work(() -> {
             String provider = prefs.getString("receive-provider", ""), api=prefs.getString("receive-api-"+provider,""), key=prefs.getString("receive-key-"+provider,"");
             if (api.isEmpty() || key.isEmpty()) throw new Exception("Select a controller and configure its Wallet Swap Access first.");
-            for (String name : prefs.getAll().keySet()) if (name.startsWith("swap-receive-")) {
-                org.json.JSONObject saved=new org.json.JSONObject(prefs.getString(name,"{}"));
-                org.json.JSONObject reply=saved.optJSONObject("reply");
-                if (!saved.optBoolean("dismissed") && !saved.optBoolean("received") && (reply==null || !reply.optBoolean("terminal")))
-                    throw new Exception("A swap request is still pending. Open Swap requests to resume it before creating another.");
-            }
+            if (pendingSwapReceive()!=null)
+                throw new Exception("A swap request is still pending. Open Swap requests to resume it before creating another.");
             LightningOuterClass.AddInvoiceResponse result=LightningOuterClass.AddInvoiceResponse.parseFrom(node.rpc("addInvoice",
-                LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(expirySeconds).setPrivate(true).build()));
+                LightningOuterClass.Invoice.newBuilder().setValue(sats).setMemo(description).setExpiry(expirySeconds).setPrivate(includeHints).setIsBlinded(blindedPaths).build()));
             String hash=SwapReceive.hash(result.getRHash().toByteArray());
             org.json.JSONObject record=new org.json.JSONObject().put("hash",hash).put("invoice",result.getPaymentRequest()).put("sats",sats)
                 .put("provider",provider).put("api",api).put("environment",prefs.getString("network","regtest")).put("created",System.currentTimeMillis());
@@ -3110,9 +3946,25 @@ public final class MainActivity extends Activity {
     }
     private void swapReceipts() {
         page("Swap requests");
+        button("Clear swap requests", () -> confirmAction("Clear swap requests?",
+            "Clear finished and dismissed requests from this list. Swaps still in progress will remain.",
+            "Clear swap requests", () -> {
+                try {
+                    android.content.SharedPreferences.Editor edit=prefs.edit();
+                    for (String key:prefs.getAll().keySet()) if (key.startsWith("swap-receive-")) {
+                        org.json.JSONObject saved=new org.json.JSONObject(prefs.getString(key,"{}"));
+                        if (!SwapReceive.inProgress(saved)) edit.putString(key,saved.put("history_hidden",true).toString());
+                    }
+                    if (!edit.commit()) throw new Exception("Could not clear swap requests.");
+                    swapReceipts();
+                } catch (Exception e) { error(e); }
+            }));
         java.util.List<org.json.JSONObject> records=new ArrayList<>();
         try {
-            for (String name:prefs.getAll().keySet()) if (name.startsWith("swap-receive-")) records.add(new org.json.JSONObject(prefs.getString(name,"{}")));
+            for (String name:prefs.getAll().keySet()) if (name.startsWith("swap-receive-")) {
+                org.json.JSONObject saved=new org.json.JSONObject(prefs.getString(name,"{}"));
+                if (!saved.optBoolean("history_hidden") || SwapReceive.inProgress(saved)) records.add(saved);
+            }
             records.sort((a,b)->Long.compare(b.optLong("created"),a.optLong("created")));
             for (org.json.JSONObject r:records) button(displayAmount(r.optLong("sats"))+" · "+swapReceiveState(r),()->showSwapReceive(r));
             if (records.isEmpty()) text("No swap requests yet.");
@@ -3122,6 +3974,7 @@ public final class MainActivity extends Activity {
     private String swapReceiveState(org.json.JSONObject record) {
         if (record.optBoolean("dismissed")) return "Not created";
         if (record.optBoolean("received")) return "Received";
+        if (record.optBoolean("cancel_pending")) return "Cancelling…";
         org.json.JSONObject reply=record.optJSONObject("reply");
         return reply==null ? "Request pending" : reply.optString("state","pending").replace('_',' ');
     }
@@ -3129,28 +3982,44 @@ public final class MainActivity extends Activity {
         work(() -> requestSwapReceive(new org.json.JSONObject(prefs.getString("swap-receive-"+hash,"{}")), create));
     }
     private void requestSwapReceive(org.json.JSONObject record, boolean create) throws Exception {
+        requestSwapReceive(record, create ? "create" : "status");
+    }
+    private void requestSwapReceive(org.json.JSONObject record, String action) throws Exception {
         record.remove("last_error");
-        try { requestSwapReceiveChecked(record, create); }
+        if (action.equals("cancel")) {
+            record.put("cancel_pending",true);
+            if (!prefs.edit().putString("swap-receive-"+record.getString("hash"),record.toString()).commit()) throw new Exception("Could not save cancellation request.");
+            runOnUiThread(() -> showSwapReceive(record));
+        }
+        try { requestSwapReceiveChecked(record, action); }
         catch (Exception e) {
             record.put("last_error", e.getMessage()==null ? e.getClass().getSimpleName() : e.getMessage());
-            if (!create && e.getMessage()!=null && e.getMessage().contains("Code: wallet_receive_not_found")) record.put("not_found",true);
+            if (!action.equals("create") && e.getMessage()!=null && e.getMessage().contains("Code: wallet_receive_not_found")) {
+                record.put("not_found",true);
+                SwapReceive.dismissUncreatedCancellation(record);
+            }
             if (!prefs.edit().putString("swap-receive-"+record.getString("hash"),record.toString()).commit()) throw new Exception("Could not save receive error; check the existing request before retrying.");
-            runOnUiThread(() -> { if (screen.equals("Swap invoice") && record.optString("hash").equals(viewingSwapHash)) showSwapReceive(record); });
+            runOnUiThread(() -> {
+                if (screen.equals("Swap invoice") && record.optString("hash").equals(viewingSwapHash)) {
+                    if (record.optBoolean("dismissed")) swapReceipts();
+                    else showSwapReceive(record);
+                }
+            });
         }
     }
-    private void requestSwapReceiveChecked(org.json.JSONObject record, boolean create) throws Exception {
-        if (create) record.remove("not_found");
+    private void requestSwapReceiveChecked(org.json.JSONObject record, String action) throws Exception {
+        if (action.equals("create")) record.remove("not_found");
         String hash=record.getString("hash");
         LightningOuterClass.Invoice own=LightningOuterClass.Invoice.parseFrom(node.rpc("lookupInvoice",LightningOuterClass.PaymentHash.newBuilder().setRHashStr(hash).build()));
         if (own.getState()==LightningOuterClass.Invoice.InvoiceState.SETTLED) {
-            record.put("received",true);
+            record.put("received",true).put("received_sats", own.getAmtPaidSat());
         } else {
             String api=record.getString("api"); prepareControllerTransport(api);
-            org.json.JSONObject request=new org.json.JSONObject().put("action",create ? "create":"status").put("invoice",record.getString("invoice"))
+            org.json.JSONObject request=new org.json.JSONObject().put("action",action).put("invoice",record.getString("invoice"))
                 .put("environment",record.getString("environment")).put("provider",record.getString("provider"));
             org.json.JSONObject reply=SwapControllers.receive(api,prefs.getString("receive-key-"+record.getString("provider"),""),request,controllerTor(api));
             LightningOuterClass.PayReq decoded=reply.has("invoice") ? LightningOuterClass.PayReq.parseFrom(node.rpc("decodePayReq",LightningOuterClass.PayReqString.newBuilder().setPayReq(reply.getString("invoice")).build())) : null;
-            SwapReceive.validate(record,reply,decoded); record.put("reply",reply);
+            SwapReceive.validate(record,reply,decoded); record.put("reply",reply); record.remove("cancel_pending");
             if (!reply.optBoolean("terminal")) {
                 long now = System.currentTimeMillis();
                 if (now - record.optLong("market_checked") >= 60000) {
@@ -3168,17 +4037,43 @@ public final class MainActivity extends Activity {
         runOnUiThread(() -> { if (screen.equals("Swap invoice") && hash.equals(viewingSwapHash)) showSwapReceive(record); });
     }
     private void showSwapReceive(org.json.JSONObject record) {
-        page("Swap invoice"); viewingSwapHash=record.optString("hash");
-        text("Receive "+displayAmount(record.optLong("sats"))); text(swapReceiveState(record));
-        if (record.has("last_error")) text(record.optString("last_error"));
+        if (record.optBoolean("received")) {
+            showReceived(record.optLong("received_sats", record.optLong("sats")));
+            return;
+        }
+        boolean refreshing=screen.equals("Swap invoice") && record.optString("hash").equals(viewingSwapHash);
+        org.json.JSONObject currentReply=record.optJSONObject("reply");
+        boolean expired=currentReply!=null && currentReply.optLong("expires_at")<=System.currentTimeMillis()/1000;
+        String content=record.toString()+"|"+expired;
+        if (refreshing && content.equals(displayedSwapReceive)) return;
+        int previousScroll=refreshing && pageScroll!=null ? pageScroll.getScrollY() : 0;
+        page("Swap invoice"); viewingSwapHash=record.optString("hash"); displayedSwapReceive=content;
+        if (refreshing && pageTitle!=null) {
+            if (onboardingReveal!=null) { onboardingReveal.cancel(); onboardingReveal=null; }
+            pageTitle.setReveal(1f);
+        }
+        swapReceiveAmountSats=record.optLong("sats");
+        swapReceiveAmountText=text(""); updateSwapReceiveAmount();
+        swapReceiveAmountText.setMinHeight(dp(48));
+        swapReceiveAmountText.setOnClickListener(v -> {
+            int count=prefs.getString("fiat-currency","USD").equals("Off") ? 2 : 3;
+            prefs.edit().putInt("display-unit",(displayUnit()+1)%count).apply();
+            updateSwapReceiveAmount();
+            if (displayUnit()==2) fetchFiatRates();
+        });
+        text(swapReceiveState(record));
+        if (record.has("last_error")) {
+            String message=record.optString("last_error");
+            copyableError(message);
+        }
         if (record.optBoolean("not_found") && !record.optBoolean("dismissed")) button("Dismiss uncreated request", () -> {
             try { record.put("dismissed",true); prefs.edit().putString("swap-receive-"+record.getString("hash"),record.toString()).commit(); swapReceipts(); }
             catch(Exception e) { error(e); }
         });
         org.json.JSONObject reply=record.optJSONObject("reply");
-        if (!record.optBoolean("received") && reply!=null && !reply.optBoolean("terminal")) {
+        if (!record.optBoolean("received") && !record.optBoolean("cancel_pending") && reply!=null && !reply.optBoolean("terminal") && !reply.optBoolean("cancel_requested")) {
             long deadline=reply.optLong("expires_at");
-            text("Sender pays "+(reply.optLong("btc_msat")/1000.0)+" BTC sats");
+            text("Sender pays "+SwapSend.sats(reply.optLong("btc_msat"))+" BTC sats");
             text(swapFeeText(reply));
             text("Pay before "+java.text.DateFormat.getTimeInstance().format(new Date(deadline*1000)));
             if (deadline>System.currentTimeMillis()/1000 && reply.has("invoice") && !reply.optBoolean("blocked") && swapMarketReview(record, reply)) {
@@ -3190,15 +4085,97 @@ public final class MainActivity extends Activity {
                     ImageView qr=new ImageView(this);qr.setImageBitmap(bitmap);qr.setContentDescription("BTC Lightning invoice QR code");
                     addQrFrame(qr, dp(280));
                     button("Copy BTC invoice",()->getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("BTC Lightning invoice",invoice)));
-                    text(invoice);
+                    copyableInvoice(invoice);
                 } catch(Exception e) { error(e); }
             } else if (deadline<=System.currentTimeMillis()/1000) text("Payment window ended. Checking the final swap outcome.");
         }
         if (!record.optBoolean("dismissed") && !record.optBoolean("received") && (reply==null || !reply.optBoolean("terminal"))) {
             button("Check status",()->refreshSwapReceive(record.optString("hash"),false));
-            button("Retry request",()->refreshSwapReceive(record.optString("hash"),true));
+            boolean cancelling=record.optBoolean("cancel_pending") || (reply!=null && reply.optBoolean("cancel_requested"));
+            if (!cancelling) button("Retry request",()->refreshSwapReceive(record.optString("hash"),true));
+            if (reply==null || reply.optBoolean("can_cancel") || record.optBoolean("cancel_pending"))
+                button(record.optBoolean("cancel_pending") ? "Retry cancellation" : "Cancel swap", () -> cancelSwapReceive(record));
+            if (reply!=null && reply.optBoolean("cancel_requested")) text("Cancelling… Waiting for the controller to confirm cleanup. The payment invoice is hidden.");
         }
         button("Swap requests",this::swapReceipts); button("Home",this::home);
+        if (refreshing) restorePageScroll(previousScroll);
+    }
+    private void restorePageScroll(int previousScroll) {
+        ScrollView restored=pageScroll;
+        restored.getViewTreeObserver().addOnGlobalLayoutListener(new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+            @Override public void onGlobalLayout() {
+                restored.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+                if (pageScroll==restored) restored.scrollTo(0,previousScroll);
+            }
+        });
+    }
+    private TextView copyableInvoice(String invoice) {
+        TextView value=text(invoice);
+        value.setContentDescription("Lightning invoice. Tap to copy.");
+        value.setOnClickListener(v -> {
+            getSystemService(android.content.ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("Lightning invoice",invoice));
+            Toast.makeText(this,"Invoice copied",Toast.LENGTH_SHORT).show();
+        });
+        return value;
+    }
+    private void updateSwapReceiveAmount() {
+        if (swapReceiveAmountText!=null) {
+            swapReceiveAmountText.setText("Receive " + displayAmount(swapReceiveAmountSats));
+            swapReceiveAmountText.setContentDescription(swapReceiveAmountText.getText() + ". Tap to change currency.");
+        }
+    }
+    private void updateReceivedAmount() {
+        if (receivedAmountText!=null) {
+            receivedAmountText.setText("Received " + displayAmount(receivedAmountSats));
+            receivedAmountText.setContentDescription(receivedAmountText.getText() + ". Tap to change currency.");
+        }
+    }
+    private void revealPaymentCheck(String description) {
+        String successScreen=screen;
+        OnboardingTitleView heading=pageTitle;
+        int position=page.indexOfChild(heading);
+        page.removeView(heading);
+        LinearLayout titleRow=new LinearLayout(this);
+        titleRow.setGravity(Gravity.CENTER); titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.addView(heading,new LinearLayout.LayoutParams(-2,-2));
+        TextView check=new TextView(this); check.setText("✓"); check.setTextSize(28);
+        check.setTextColor(0xff63bb89); check.setPadding(dp(10),0,0,dp(20));
+        check.setContentDescription(description); check.setVisibility(View.INVISIBLE);
+        titleRow.addView(check,new LinearLayout.LayoutParams(-2,-2));
+        page.addView(titleRow,position,new LinearLayout.LayoutParams(-1,-2));
+        Runnable revealCheck=() -> {
+            if (pageTitle!=heading || !screen.equals(successScreen)) return;
+            check.setVisibility(View.VISIBLE);
+            if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                check.setAlpha(0f); check.animate().alpha(1f).setDuration(180).start();
+            }
+        };
+        if (onboardingReveal!=null && onboardingReveal.isRunning()) {
+            onboardingReveal.addListener(new android.animation.AnimatorListenerAdapter() {
+                private boolean cancelled;
+                @Override public void onAnimationCancel(android.animation.Animator animation) { cancelled=true; }
+                @Override public void onAnimationEnd(android.animation.Animator animation) { if (!cancelled) revealCheck.run(); }
+            });
+        } else revealCheck.run();
+    }
+    private void showPaymentSuccessful() {
+        page("Payment successful");
+        revealPaymentCheck("Payment successful");
+        button("Home",this::home);
+    }
+    private void showReceived(long sats) {
+        page("Received", false, () -> showReceived(sats));
+        revealPaymentCheck("Payment received");
+        receivedAmountSats=sats;
+        receivedAmountText=text(""); receivedAmountText.setGravity(Gravity.CENTER); receivedAmountText.setTextSize(20);
+        receivedAmountText.setMinHeight(dp(56)); updateReceivedAmount();
+        receivedAmountText.setOnClickListener(v -> {
+            int count=prefs.getString("fiat-currency","USD").equals("Off") ? 2 : 3;
+            prefs.edit().putInt("display-unit",(displayUnit()+1)%count).apply();
+            updateReceivedAmount();
+            if (displayUnit()==2) fetchFiatRates();
+        });
+        button("Home",this::home);
     }
     private boolean swapMarketReview(org.json.JSONObject record, org.json.JSONObject reply) {
         String approvalKey;
@@ -3243,8 +4220,7 @@ public final class MainActivity extends Activity {
             if (invoice.getState() == LightningOuterClass.Invoice.InvoiceState.SETTLED) runOnUiThread(() -> {
                 if (!screen.equals("Lightning invoice") || !hash.equals(receivingInvoiceHash)) return;
                 receivingInvoiceHash = null;
-                Toast.makeText(this, "Lightning payment received", Toast.LENGTH_SHORT).show();
-                page("Home"); handler.post(this::home);
+                showReceived(invoice.getAmtPaidSat());
             });
         });
     }
@@ -3266,8 +4242,14 @@ public final class MainActivity extends Activity {
             Button scanChoice = new Button(this), pasteChoice = new Button(this);
             styleButton(scanChoice, false); styleButton(pasteChoice, false);
             scanChoice.setText("Scan QR"); pasteChoice.setText("Paste from Clipboard");
-            LinearLayout.LayoutParams scanSize = new LinearLayout.LayoutParams(0, dp(72), 1);
-            LinearLayout.LayoutParams pasteSize = new LinearLayout.LayoutParams(0, dp(72), 1);
+            // Let wrapped labels determine row height; both actions stretch equally.
+            for (Button choice : new Button[]{scanChoice, pasteChoice}) {
+                choice.setSingleLine(false);
+                choice.setMinHeight(dp(72)); choice.setMinimumHeight(dp(72));
+                choice.setGravity(Gravity.CENTER);
+            }
+            LinearLayout.LayoutParams scanSize = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
+            LinearLayout.LayoutParams pasteSize = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
             scanSize.rightMargin = dp(4); pasteSize.leftMargin = dp(4);
             choices.addView(scanChoice, scanSize); choices.addView(pasteChoice, pasteSize);
             AlertDialog dialog = new WalletDialogBuilder().setTitle("Invoice").setView(choices).create();
@@ -3285,7 +4267,7 @@ public final class MainActivity extends Activity {
                 dialog.dismiss();
             });
             dialog.show();
-            if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff101517, 18, 0xff304037));
+            if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(surface(0xff12120f, 18, 0xff69563d));
         });
         AmountEntry entry = new AmountEntry("Amount", "Enter an amount"); entry.visible(false);
         Runnable detectAmount = () -> {
@@ -3361,14 +4343,11 @@ public final class MainActivity extends Activity {
                     final boolean succeeded = result.getStatus() == LightningOuterClass.Payment.PaymentStatus.SUCCEEDED;
                     runOnUiThread(() -> {
                         if (isDestroyed()) return;
-                        page(succeeded ? "Payment successful" : label);
-                        if (succeeded) {
-                            PaymentHandshakeView handshake = new PaymentHandshakeView(MainActivity.this);
-                            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(-1, dp(220));
-                            size.topMargin = dp(20); size.bottomMargin = dp(20);
-                            page.addView(handshake, size);
+                        if (succeeded) showPaymentSuccessful();
+                        else {
+                            page(label);
+                            button("Home", MainActivity.this::home);
                         }
-                        button("Home", MainActivity.this::home);
                     });
                 } catch (Exception e) { onError(e); }
             }
@@ -3386,6 +4365,8 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if(request==6050) { pinOpening=false; checkPinLock(); return; }
+        if (request == SAVE_CHANNEL_BACKUP || request == TEST_CHANNEL_BACKUP) { channelBackupResult(request, result, data); return; }
         com.google.zxing.integration.android.IntentResult scan = com.google.zxing.integration.android.IntentIntegrator.parseActivityResult(request, result, data);
         if (scan == null) return;
         if (connectionScan != null) {
@@ -3416,5 +4397,5 @@ public final class MainActivity extends Activity {
             error(new Exception("This QR code is not a supported Lightning invoice or Bitcoin payment address. " + e.getMessage()));
         }
     }
-    @Override protected void onDestroy() { if (onboardingReveal != null) onboardingReveal.cancel(); if (headerSlideAnimation != null) headerSlideAnimation.cancel(); handler.removeCallbacksAndMessages(null); if (bound) unbindService(connection); super.onDestroy(); }
+    @Override protected void onDestroy() { if (launchWallet != null) launchWallet.dispose(); if (onboardingReveal != null) onboardingReveal.cancel(); if (headerSlideAnimation != null) headerSlideAnimation.cancel(); handler.removeCallbacksAndMessages(null); if (bound) unbindService(connection); super.onDestroy(); }
 }

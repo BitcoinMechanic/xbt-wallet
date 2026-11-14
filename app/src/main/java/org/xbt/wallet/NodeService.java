@@ -223,6 +223,55 @@ public final class NodeService extends Service {
             public void onError(Exception e) { if (!done) { done = true; activeStreams.decrementAndGet(); } callback.onError(e); }
         });
     }
+    ChannelBackupFile.Export exportChannelBackup() throws Exception {
+        if (isRemote()) {
+            String id = remote.call("getinfo").getString("id");
+            return ChannelBackupFile.clnExport(WalletProfiles.settings(this, profile).getString("network", "mainnet"), id,
+                remote.call("staticbackup").getJSONArray("scb"));
+        }
+        lnrpc.LightningOuterClass.ChanBackupSnapshot snapshot = lnrpc.LightningOuterClass.ChanBackupSnapshot.parseFrom(
+            rpc("exportAllChannelBackups", lnrpc.LightningOuterClass.ChanBackupExportRequest.getDefaultInstance()));
+        byte[] data = snapshot.getMultiChanBackup().getMultiChanBackup().toByteArray();
+        lnrpc.LightningOuterClass.VerifyChanBackupResponse checked = lnrpc.LightningOuterClass.VerifyChanBackupResponse.parseFrom(
+            rpc("verifyChanBackup", ChannelBackupFile.lndSnapshot(data)));
+        return new ChannelBackupFile.Export(data, checked.getChanPointsCount(), "backup");
+    }
+    String testChannelBackup(byte[] data) throws Exception {
+        if (isRemote()) return ChannelBackupFile.testCln(data,
+            WalletProfiles.settings(this, profile).getString("network", "mainnet"), remote.call("getinfo").getString("id"),
+            remote.call("staticbackup").getJSONArray("scb"));
+        lnrpc.LightningOuterClass.VerifyChanBackupResponse saved = lnrpc.LightningOuterClass.VerifyChanBackupResponse.parseFrom(
+            rpc("verifyChanBackup", ChannelBackupFile.lndSnapshot(data)));
+        lnrpc.LightningOuterClass.ChanBackupSnapshot current = lnrpc.LightningOuterClass.ChanBackupSnapshot.parseFrom(
+            rpc("exportAllChannelBackups", lnrpc.LightningOuterClass.ChanBackupExportRequest.getDefaultInstance()));
+        lnrpc.LightningOuterClass.VerifyChanBackupResponse live = lnrpc.LightningOuterClass.VerifyChanBackupResponse.parseFrom(
+            rpc("verifyChanBackup", ChannelBackupFile.lndSnapshot(current.getMultiChanBackup().getMultiChanBackup().toByteArray())));
+        return "Backup decrypted and passed integrity checks for this wallet.\n"
+            + ChannelBackupFile.coverage(saved.getChanPointsList(), live.getChanPointsList())
+            + "\nThis does not test peer availability or guarantee recovery. No recovery was attempted and no channels were closed.";
+    }
+    byte[] signReplacement(ReplacementTransaction.Plan plan) throws Exception {
+        if (isRemote()) return remote.signReplacement(plan);
+        walletrpc.FeeBumpRpc.FinalizePsbtResponse signed = walletrpc.FeeBumpRpc.FinalizePsbtResponse.parseFrom(
+            rpc("walletKitFinalizePsbt", walletrpc.FeeBumpRpc.FinalizePsbtRequest.newBuilder()
+                .setFundedPsbt(ByteString.copyFrom(plan.psbt)).build()));
+        byte[] raw = signed.getRawFinalTx().toByteArray();
+        plan.verifySigned(raw); return raw;
+    }
+    String publishReplacement(byte[] signed, ReplacementTransaction.Plan plan) throws Exception {
+        String expected = ReplacementTransaction.txid(plan.unsigned);
+        if (isRemote()) {
+            String actual = remote.publishReplacement(signed);
+            if (!actual.equals(expected)) throw new Exception("Node returned an unexpected replacement transaction ID. Check history before retrying.");
+        } else {
+            plan.verifySigned(signed);
+            walletrpc.FeeBumpRpc.PublishResponse result = walletrpc.FeeBumpRpc.PublishResponse.parseFrom(
+                rpc("walletKitPublishTransaction", walletrpc.FeeBumpRpc.Transaction.newBuilder()
+                    .setTxHex(ByteString.copyFrom(signed)).setLabel("RBF replacement of " + plan.source.txid).build()));
+            if (!result.getPublishError().isEmpty()) throw new Exception(result.getPublishError());
+        }
+        return expected;
+    }
     public void closeChannel(byte[] request, lndmobile.RecvStream callback) {
         if (isRemote()) {
             activeStreams.incrementAndGet();

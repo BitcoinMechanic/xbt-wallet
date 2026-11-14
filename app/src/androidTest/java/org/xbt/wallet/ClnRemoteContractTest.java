@@ -9,6 +9,43 @@ import routerrpc.RouterOuterClass;
 public class ClnRemoteContractTest {
     private static final String HASH="ab".repeat(32), ID="02"+"cd".repeat(32);
 
+    @Test public void invoiceLookupSupportsTextAndBinaryHashes() throws Exception {
+        int[] calls={0};
+        ClnRemote node=new ClnRemote((method,args)->{
+            calls[0]++;
+            assertEquals("listinvoices",method);
+            assertEquals(HASH,args.getString("payment_hash"));
+            return new JSONObject().put("invoices",new JSONArray().put(new JSONObject()
+                .put("payment_hash",HASH).put("status","paid").put("amount_received_msat",1000000)));
+        },"mainnet",ID);
+        PaymentHash[] requests={
+            PaymentHash.newBuilder().setRHashStr(HASH).build(),
+            PaymentHash.newBuilder().setRHash(ClnRemote.bytes(HASH)).build(),
+            PaymentHash.newBuilder().setRHashStr(HASH.toUpperCase(java.util.Locale.ROOT)).setRHash(ClnRemote.bytes(HASH)).build()
+        };
+        for(PaymentHash request:requests) {
+            Invoice invoice=Invoice.parseFrom(node.rpc("lookupInvoice",request));
+            assertEquals(Invoice.InvoiceState.SETTLED,invoice.getState());
+            assertEquals(ClnRemote.bytes(HASH),invoice.getRHash());
+        }
+        assertEquals(3,calls[0]);
+    }
+
+    @Test public void invalidInvoiceHashesNeverReachNode() throws Exception {
+        ClnRemote node=new ClnRemote((method,args)->{throw new AssertionError("Invalid hash reached node");},"mainnet",ID);
+        PaymentHash[] requests={
+            PaymentHash.getDefaultInstance(),
+            PaymentHash.newBuilder().setRHashStr("ab").build(),
+            PaymentHash.newBuilder().setRHashStr("z".repeat(64)).build(),
+            PaymentHash.newBuilder().setRHash(ClnRemote.bytes("ab")).build(),
+            PaymentHash.newBuilder().setRHashStr(HASH).setRHash(ClnRemote.bytes("cd".repeat(32))).build()
+        };
+        for(PaymentHash request:requests) {
+            try { node.rpc("lookupInvoice",request); fail("Accepted invalid hash"); }
+            catch(IllegalArgumentException expected) { assertTrue(expected.getMessage().contains("Invoice lookup")); }
+        }
+    }
+
     @Test public void unconfirmedDepositsReachBalancesOutputsAndReceiptDetection() throws Exception {
         JSONObject coin = new JSONObject().put("txid", HASH).put("output", 0)
             .put("amount_msat", 12500000).put("address", "receive-address")
@@ -71,6 +108,21 @@ public class ClnRemoteContractTest {
         node.rpc("offersCreateOffer",offersrpc.OffersOuterClass.CreateOfferRequest.getDefaultInstance());
         node.rpc("addInvoice",Invoice.newBuilder().setExpiry(InvoiceExpiration.seconds("5",3)).build());
     }
+    @Test public void invoiceRoutingChoicesAreHonored() throws Exception {
+        final int[] calls = {0};
+        ClnRemote node=new ClnRemote((method,args)->{
+            calls[0]++;
+            assertEquals("invoice",method);
+            assertFalse(args.getBoolean("exposeprivatechannels"));
+            return new JSONObject().put("bolt11","invoice-fixture").put("payment_hash",HASH);
+        },"mainnet",ID);
+        node.rpc("addInvoice",Invoice.newBuilder().setPrivate(false).build());
+        try {
+            node.rpc("addInvoice",Invoice.newBuilder().setIsBlinded(true).build());
+            fail("Unsupported blinded invoices must not silently become ordinary invoices");
+        } catch(Exception expected) { assertTrue(expected.getMessage().contains("Blinded paths")); }
+        assertEquals(1,calls[0]);
+    }
     @Test public void invoiceAndPaymentPreserveUnitsAndFeeLimit() throws Exception {
         ClnRemote node=new ClnRemote((method,args)->{
             if(method.equals("invoice")){
@@ -80,7 +132,7 @@ public class ClnRemoteContractTest {
             assertEquals("pay",method);assertEquals(250100,args.getLong("amount_msat"));assertEquals("10000msat",args.getString("maxfee"));assertEquals(30,args.getInt("retry_for"));
             return new JSONObject().put("payment_hash",HASH).put("status","complete").put("amount_msat",250100).put("amount_sent_msat",251200).put("created_at",123);
         },"mainnet",ID);
-        AddInvoiceResponse invoice=AddInvoiceResponse.parseFrom(node.rpc("addInvoice",Invoice.newBuilder().setMemo("hello").build()));assertEquals(HASH,ClnRemote.hex(invoice.getRHash()));
+        AddInvoiceResponse invoice=AddInvoiceResponse.parseFrom(node.rpc("addInvoice",Invoice.newBuilder().setMemo("hello").setPrivate(true).build()));assertEquals(HASH,ClnRemote.hex(invoice.getRHash()));
         Payment p=node.pay(RouterOuterClass.SendPaymentRequest.newBuilder().setPaymentRequest("fixture").setAmtMsat(250100).setFeeLimitSat(10).setTimeoutSeconds(30).build());
         assertEquals(Payment.PaymentStatus.SUCCEEDED,p.getStatus());assertEquals(1100,p.getFeeMsat());assertEquals(250100,p.getValueMsat());
     }
@@ -95,6 +147,25 @@ public class ClnRemoteContractTest {
         },"mainnet",ID);
         SendCoinsResponse sent=SendCoinsResponse.parseFrom(node.rpc("sendCoins",SendCoinsRequest.newBuilder().setAddr("address").setSendAll(true).setSatPerVbyte(2).setMinConfs(1).addOutpoints(OutPoint.newBuilder().setTxidStr(HASH).setOutputIndex(2)).build()));assertEquals(HASH,sent.getTxid());
         CloseStatusUpdate close=node.close(CloseChannelRequest.newBuilder().setChannelPoint(ChannelPoint.newBuilder().setFundingTxidStr(HASH).setOutputIndex(2)).setSatPerVbyte(2).build());assertTrue(close.hasClosePending());
+    }
+    @Test public void forceCloseUsesShortTimeoutAndNoCooperativeFeeOverride() throws Exception {
+        ClnRemote node = new ClnRemote((method, args) -> {
+            if (method.equals("listpeerchannels")) return new JSONObject().put("channels", new JSONArray().put(
+                new JSONObject().put("funding_txid", HASH).put("funding_outnum", 2).put("channel_id", "channel")));
+            assertEquals("close", method);
+            assertEquals("channel", args.getString("id"));
+            assertEquals(1, args.getInt("unilateraltimeout"));
+            assertFalse(args.has("feerange"));
+            assertFalse(args.has("force_lease_closed"));
+            return new JSONObject().put("type", "unilateral").put("txids", new JSONArray().put(HASH));
+        }, "mainnet", ID);
+        Channel channel = Channel.newBuilder().setChannelPoint(HASH + ":2").build();
+        CloseChannelRequest request = MainActivity.channelCloseRequest(channel, 99, true);
+        assertTrue(request.getForce());
+        assertEquals(0, request.getSatPerVbyte()); assertEquals(0, request.getMaxFeePerVbyte());
+        assertTrue(node.close(request).hasClosePending());
+        CloseChannelRequest cooperative = MainActivity.channelCloseRequest(channel, 3, false);
+        assertFalse(cooperative.getForce()); assertEquals(3, cooperative.getSatPerVbyte()); assertEquals(3, cooperative.getMaxFeePerVbyte());
     }
     @Test public void preparationIsDiscardedBeforeReviewAndFundingUsesSelection() throws Exception {
         java.util.List<String> calls=new java.util.ArrayList<>();

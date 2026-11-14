@@ -8,6 +8,19 @@ import static org.junit.Assert.*;
 
 /** Explicit read-only integration probe; never creates or resets a wallet. */
 public class TorTransportTest {
+    @Test public void recoversLocalControlConnection() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        TorTransport tor = new TorTransport();
+        try {
+            int port = tor.start(context, status -> android.util.Log.i("TorProbe", status));
+            java.lang.reflect.Method connect = TorTransport.class.getDeclaredMethod("connectRecoveryControl", Context.class);
+            connect.setAccessible(true); connect.invoke(tor, context);
+            java.lang.reflect.Method info = TorTransport.class.getDeclaredMethod("info", org.torproject.jni.TorService.class, String.class);
+            info.setAccessible(true);
+            assertEquals(port, TorTransport.listenerPort((String) info.invoke(tor, null, "net/listeners/socks")));
+            assertEquals("1", info.invoke(tor, null, "status/circuit-established"));
+        } finally { tor.close(context); }
+    }
     @Test public void reachesConfiguredOnionPeer() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         String endpoint = Policy.onionEndpoint(context.getSharedPreferences("wallet", 0).getString("syncPeer", ""));

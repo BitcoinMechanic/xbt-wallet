@@ -67,9 +67,20 @@ final class SwapControllers {
     private static JSONObject walletRequest(String origin, String token, JSONObject request, boolean useTor, String path) throws Exception {
         if (!token.matches("[a-f0-9]{64}")) throw new Exception("Configure this controller’s Wallet Swap Access key first.");
         JSONObject response = request(ControllerAddress.origin(origin), path, useTor, request, token);
+        return walletResponse(response);
+    }
+    static JSONObject walletResponse(JSONObject response) throws Exception {
         if (response.has("error")) {
             String code = response.getString("error");
             String message = switch (code) {
+                case "recipient_invoice_timing" -> "The recipient invoice is expired, too close to expiry, or has a future creation time. Create a fresh invoice; if this persists, check the node clocks. No new swap was created.";
+                case "recipient_invoice_expiring" -> "The recipient invoice expires too soon. A new swap needs a 10-minute payment window plus 3 minutes of safety margin. Create a fresh invoice. No new swap was created.";
+                case "contract_expiry_invalid" -> "The controller rejected inconsistent invoice or quote timestamps. No new swap was created.";
+                case "service_swap_resolving" -> "The swap is already resolving. Follow its status until cleanup completes.";
+                case "service_payment_already_started" -> "The outgoing payment may already have started. This swap cannot be cancelled; check its status until settlement or recovery completes.";
+                case "service_cancel_not_ready" -> "The controller is still preparing the swap. Check status, then cancel once setup finishes.";
+                case "service_swap_already_finished" -> "This swap has already finished. Refresh its status.";
+                case "service_approved_swap_cannot_cancel", "wallet_request_invalid" -> "The controller refused this operation. If you requested cancellation, update the controller to a version that supports cancelling issued swap invoices, then check status.";
                 case "grant_closed" -> "The node grant expired, was paused, or was replaced. Wait for the controller to refresh its node pairing, then check this request.";
                 case "channel_requires_recovery", "previous_enrollment_requires_recovery" -> "The coordinator must resolve an earlier channel or swap before accepting this request.";
                 case "route_outside_approved_channels", "approved_channel_changed" -> "The route uses a channel outside the current node grant. The controller operator must refresh its approved channels.";
@@ -78,18 +89,25 @@ final class SwapControllers {
                 case "wallet_receive_not_found" -> "The controller has not recorded this request. Use Retry request to resume with the same invoice.";
                 case "service_previous_swap_active" -> "This controller is still handling another swap in this direction. Wait for it to finish.";
                 case "market_unavailable", "market_data_invalid" -> "The controller could not obtain valid, fresh Neoxa pricing. No new quote was approved.";
-                case "market_amount_limit" -> "This swap exceeds the controller’s quote limits (up to 1,000,000 XBT sats and 10,000 BTC sats, including applicable costs). Use a smaller invoice.";
+                case "recipient_invoice_limits" -> "The node rejected the recipient invoice limits. Updated node builds accept positive recipient invoices up to 10,000,000 XBT sats or 1,000,000 BTC sats; controller pricing and grant limits may be lower. Older builds may still enforce the 1,000,000-sat XBT limit. Older builds also use this code for an invoice timelock above 40 blocks. If the amount is within range, check the node version and decoded invoice; this code alone does not identify the failed limit.";
+                case "market_amount_limit" -> "This swap exceeds the controller’s quote limits (up to 10,000,000 XBT sats and 100,000 BTC sats, including applicable costs). Use a smaller invoice.";
                 case "market_depth_unavailable" -> "Neoxa’s order book has insufficient depth within the controller’s price limits for this amount.";
                 case "service_review_superseded" -> "The controller’s node pairing changed since this quote was created. Cancel the unapproved quote and request a fresh invoice.";
                 case "service_pairing_required" -> "The controller has not paired its Lightning nodes.";
                 case "service_history_full" -> "The controller’s swap history is full. Its operator must resolve this.";
                 case "incoming_amount_below_safe_minimum" -> "The incoming swap amount is below the channel’s safe payment minimum. Use a larger recipient invoice.";
-                case "bounded_route_unavailable", "recipient_route_unknown" -> "The controller cannot find a route to the recipient wallet within its limits. Check the recipient’s inbound liquidity and invoice route hints.";
+                case "recipient_route_unknown" -> "The recipient is unknown to the routing graph, and this invoice contains no private-channel route hints. Ask the recipient for an invoice advertising its receiving channel and any private upstream hops.";
+                case "route_hint_entry_unknown" -> "The invoice contains route hints, but their entry nodes are unknown to the routing graph. A private upstream hop may be missing. Ask the recipient for a complete route hint from a publicly reachable node.";
+                case "route_hint_path_unavailable" -> "The invoice contains route hints, but the coordinator could not find a route to any advertised entry node. Check the upstream path and liquidity; this does not establish that a fee limit was exceeded.";
+                case "route_hint_fee_limit" -> "Every advertised route hint alone requires more forwarding fees than the saved routing-fee cap. Check the reported cap and invoice hint fees.";
+                case "route_hint_delay_limit" -> "Every advertised route hint exceeds the saved timelock limit before reaching its entry node. Check the invoice timelocks and reported limit.";
+                case "route_hint_hop_limit" -> "Every advertised route hint leaves no room for a path to its entry node within the saved hop limit.";
+                case "bounded_route_unavailable" -> "No usable route was found. This result alone does not identify a fee limit, missing private hop or liquidity problem. Check the route-hint diagnostics below.";
                 default -> "Controller refused the swap request.";
             };
             String details = code.matches("[a-z_]{1,80}") ? "\nCode: " + code : "";
             JSONObject diagnostic = response.optJSONObject("diagnostic");
-            if (diagnostic != null) for (String field : new String[]{"node", "role", "operation", "stage", "http_status", "rpc_code", "reference", "amount_msat", "minimum_msat", "maximum_msat"}) {
+            if (diagnostic != null) for (String field : new String[]{"node", "role", "operation", "stage", "http_status", "rpc_code", "reference", "amount_msat", "minimum_msat", "maximum_msat", "route_hint_count", "max_fee_msat", "max_delay_blocks", "max_hops", "route_hint_entry_unknown", "route_hint_path_unavailable", "route_hint_fee_limit", "route_hint_delay_limit", "route_hint_hop_limit"}) {
                 String value = diagnostic.optString(field, "");
                 if (value.matches("[a-zA-Z0-9_.-]{1,80}")) details += "\n" + field + ": " + value;
             }

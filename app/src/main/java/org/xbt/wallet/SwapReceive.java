@@ -5,6 +5,20 @@ import lnrpc.LightningOuterClass;
 
 /** Validate the displayed BTC invoice against the wallet's own XBT receive invoice. */
 final class SwapReceive {
+    /** Only a fresh controller not-found response may resolve an uncreated cancellation. */
+    static boolean dismissUncreatedCancellation(JSONObject record) throws Exception {
+        if (!record.optBoolean("not_found") || !record.optBoolean("cancel_pending")
+            || record.optBoolean("received") || record.optJSONObject("reply") != null) return false;
+        record.put("dismissed",true);
+        record.remove("cancel_pending");
+        record.remove("last_error");
+        return true;
+    }
+    static boolean inProgress(JSONObject record) {
+        JSONObject reply=record.optJSONObject("reply");
+        return !record.optBoolean("dismissed") && !record.optBoolean("received")
+            && (reply==null || !reply.optBoolean("terminal"));
+    }
     static boolean needsRefresh(JSONObject record) {
         JSONObject reply = record.optJSONObject("reply");
         return record.has("hash") && !record.has("last_error") && !record.optBoolean("received")
@@ -25,6 +39,8 @@ final class SwapReceive {
         if (prior != null) for (String field : new String[]{"id","payment_hash","xbt_msat","btc_msat","expires_at"})
             if (!prior.get(field).equals(reply.get(field))) throw new Exception("Controller changed the saved swap terms. Its invoice was not displayed.");
         if (reply.has("invoice")) {
+            if (reply.optBoolean("cancel_requested") || "cancelling".equals(reply.optString("state")) || "cancelled".equals(reply.optString("state")))
+                throw new Exception("Controller returned a payment invoice for a cancelled swap. Payment blocked.");
             if (decoded == null || !decoded.getPaymentHash().equals(record.getString("hash"))
                 || decoded.getNumMsat() != reply.getLong("btc_msat")
                 || decoded.containsFeatures(512) || decoded.containsFeatures(513) || decoded.containsFeatures(514) || decoded.containsFeatures(515)

@@ -38,6 +38,17 @@ final class ClnRemote {
         byte[] b=new byte[hex.length()/2]; for(int i=0;i<b.length;i++)b[i]=(byte)Integer.parseInt(hex.substring(i*2,i*2+2),16); return ByteString.copyFrom(b);
     }
     static String hex(ByteString bytes) { StringBuilder s=new StringBuilder(); for(byte b:bytes.toByteArray())s.append(String.format(java.util.Locale.ROOT,"%02x",b&255)); return s.toString(); }
+    private static String paymentHash(PaymentHash request) {
+        String text=request.getRHashStr();
+        ByteString binary=request.getRHash();
+        if ((!text.isEmpty() && !text.matches("[0-9a-fA-F]{64}")) ||
+            (!binary.isEmpty() && binary.size()!=32) || (text.isEmpty() && binary.isEmpty()))
+            throw new IllegalArgumentException("Invoice lookup requires a 32-byte payment hash (64 hexadecimal characters).");
+        String encoded=hex(binary);
+        if (!text.isEmpty() && !binary.isEmpty() && !text.equalsIgnoreCase(encoded))
+            throw new IllegalArgumentException("Invoice lookup received conflicting payment hashes.");
+        return text.isEmpty() ? encoded : text.toLowerCase(Locale.ROOT);
+    }
     static JSONArray array(JSONObject value,String key) { JSONArray a=value.optJSONArray(key); return a==null?new JSONArray():a; }
     private JSONArray channels() throws Exception { return array(call("listpeerchannels"),"channels"); }
     private static OffersOuterClass.Offer remoteOffer(JSONObject item) throws Exception {
@@ -162,12 +173,14 @@ final class ClnRemote {
             String features=d.optString("features","");for(int bit=0;bit<=515;bit++)if(feature(features,bit))p.putFeatures(bit,Feature.newBuilder().setIsKnown(true).build());return p.build().toByteArray();
         }
         case "addInvoice": {
-            Invoice i=(Invoice)request;JSONObject args=new JSONObject().put("amount_msat",i.getValueMsat()>0?i.getValueMsat():i.getValue()>0?Math.multiplyExact(i.getValue(),1000):"any")
-                .put("label","wallet-"+UUID.randomUUID()).put("description",i.getMemo()).put("expiry",i.getExpiry()>0?i.getExpiry():3600).put("exposeprivatechannels",true);
+            Invoice i=(Invoice)request;
+            if(i.getIsBlinded())throw new Exception("Blinded paths are not supported by this remote node’s BOLT11 invoice API.");
+            JSONObject args=new JSONObject().put("amount_msat",i.getValueMsat()>0?i.getValueMsat():i.getValue()>0?Math.multiplyExact(i.getValue(),1000):"any")
+                .put("label","wallet-"+UUID.randomUUID()).put("description",i.getMemo()).put("expiry",i.getExpiry()>0?i.getExpiry():3600).put("exposeprivatechannels",i.getPrivate());
             JSONObject r=call("invoice",args);return AddInvoiceResponse.newBuilder().setPaymentRequest(r.getString("bolt11")).setRHash(bytes(r.getString("payment_hash"))).build().toByteArray();
         }
         case "lookupInvoice": {
-            JSONArray invoices=array(call("listinvoices",new JSONObject().put("payment_hash",hex(((PaymentHash)request).getRHash()))),"invoices");
+            JSONArray invoices=array(call("listinvoices",new JSONObject().put("payment_hash",paymentHash((PaymentHash)request))),"invoices");
             if(invoices.length()!=1)throw new Exception("Invoice was not found on this node.");return invoice(invoices.getJSONObject(0)).toByteArray();
         }
         case "listInvoices": {
@@ -216,21 +229,35 @@ final class ClnRemote {
         if(r.getAmtMsat()>0)args.put("amount_msat",r.getAmtMsat());return payment(call("pay",args));
     }
     CloseStatusUpdate close(CloseChannelRequest r) throws Exception {
-        if(r.getForce())throw new Exception("Force close is not supported by this remote wallet.");
         String point=r.getChannelPoint().getFundingTxidStr()+":"+r.getChannelPoint().getOutputIndex();
         JSONArray channels=channels();String id="";for(int n=0;n<channels.length();n++){JSONObject c=channels.getJSONObject(n);if(point(c).equals(point))id=c.getString("channel_id");}
         if(id.isEmpty())throw new Exception("Channel no longer exists on the remote node.");
         // Zero prevents CLN's close timeout from escalating into a unilateral close.
-        JSONObject c=call("close",new JSONObject().put("id",id).put("unilateraltimeout",0).put("feerange",new JSONArray().put(r.getSatPerVbyte()*1000+"perkb").put(r.getSatPerVbyte()*1000+"perkb")));
+        JSONObject args = new JSONObject().put("id", id).put("unilateraltimeout", r.getForce() ? 1 : 0);
+        if (!r.getForce()) args.put("feerange", new JSONArray().put(r.getSatPerVbyte()*1000+"perkb").put(r.getSatPerVbyte()*1000+"perkb"));
+        JSONObject c=call("close",args);
         JSONArray txids = array(c, "txids");
         if (txids.length() == 0) throw new Exception("The node accepted the close but returned no closing transaction. Check channel status before retrying.");
         return CloseStatusUpdate.newBuilder().setClosePending(PendingUpdate.newBuilder().setTxid(bytes(txids.getString(0)))) .build();
+    }
+    byte[] signReplacement(ReplacementTransaction.Plan plan) throws Exception {
+        String psbt=android.util.Base64.encodeToString(plan.psbt,android.util.Base64.NO_WRAP);
+        // Existing unconfirmed withdrawal inputs may already be reserved.
+        call("reserveinputs",new JSONObject().put("psbt",psbt).put("exclusive",false));
+        JSONArray inputs=new JSONArray();for(int i=0;i<plan.source.original.inputs.size();i++)inputs.put(i);
+        String signed=call("signpsbt",new JSONObject().put("psbt",psbt).put("signonly",inputs)).getString("signed_psbt");
+        byte[] data=android.util.Base64.decode(signed,android.util.Base64.DEFAULT);
+        ReplacementTransaction.verifyPsbt(data,plan.unsigned);
+        return data;
+    }
+    String publishReplacement(byte[] signed) throws Exception {
+        return call("sendpsbt",new JSONObject().put("psbt",android.util.Base64.encodeToString(signed,android.util.Base64.NO_WRAP))).getString("txid");
     }
     private TransactionDetails transactions() throws Exception {
         JSONArray outputs=array(call("listfunds",new JSONObject().put("spent",true)),"outputs");Map<String,JSONObject> owned=new HashMap<>();
         for(int i=0;i<outputs.length();i++){JSONObject o=outputs.getJSONObject(i);owned.put(o.getString("txid")+":"+o.getInt("output"),o);}
         JSONArray txs=array(call("listtransactions"),"transactions");int height=height();TransactionDetails.Builder result=TransactionDetails.newBuilder();
-        for(int i=0;i<txs.length();i++){JSONObject tx=txs.getJSONObject(i);String hash=tx.getString("hash");long net=0;Transaction.Builder t=Transaction.newBuilder().setTxHash(hash).setNumConfirmations(confirmations(tx,height)).setBlockHeight(tx.optInt("blockheight"));
+        for(int i=0;i<txs.length();i++){JSONObject tx=txs.getJSONObject(i);String hash=tx.getString("hash");long net=0;Transaction.Builder t=Transaction.newBuilder().setTxHash(hash).setNumConfirmations(confirmations(tx,height)).setBlockHeight(tx.optInt("blockheight")).setRawTxHex(tx.optString("rawtx"));
             JSONArray ins=array(tx,"inputs");for(int k=0;k<ins.length();k++){JSONObject in=ins.getJSONObject(k),coin=owned.get(in.getString("txid")+":"+in.getInt("index"));if(coin!=null)net-=msat(coin,"amount_msat")/1000;}
             JSONArray outs=array(tx,"outputs");for(int k=0;k<outs.length();k++){JSONObject out=outs.getJSONObject(k),coin=owned.get(hash+":"+out.getInt("index"));if(coin!=null){long value=msat(coin,"amount_msat")/1000;net+=value;t.addOutputDetails(OutputDetail.newBuilder().setAddress(coin.optString("address")).setAmount(value).setIsOurAddress(true).setOutputIndex(out.getInt("index")));}}
             // CLN does not expose transaction timestamps here. Block height is retained, never invented as a date.
