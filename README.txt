@@ -1,159 +1,205 @@
-XBT Wallet — native Android alpha
+XBT Wallet — Android alpha
+==========================
 
-Native Java Android wallet with an embedded XBT/BLAKE2b LND node,
-on-chain coin control, Lightning payments/channels, and embedded Tor.
-This is development software; full wallet/channel recovery is unfinished.
+An Android wallet for XBT (Bitcoin Blake2b), with on-chain coin control,
+Lightning, remote Core Lightning control, and BTC/XBT Lightning swaps.
 
-Project contents
-- app/src: application, vendored protobuf definitions, unit/instrumentation tests
-- scripts: native library build and local emulator/regtest helpers
-- patches: modifications to the pinned LND fork
-- SCOPE.md / ux.md: product requirements, implementation history, and backlog
-- BUILD.txt: local build notes and verification checkpoints (historical sections
-  describe earlier versions; later checkpoints supersede them)
+This is the first alpha, v0.1.0-alpha.1. Use small test amounts. Wallet recovery
+import is unfinished; exporting or testing a backup is not a recovery flow.
+The app is not a BTC wallet: BTC Lightning interoperability uses a swap controller.
 
-Build prerequisites
-JDK 25, Go 1.27.3, Android SDK platform 37.1 / Build Tools 36.0.0,
-NDK 27.2.12479018, protoc and the fork's protobuf generation tools.
-Gradle 9.6.0 is provided through the checksum-pinned wrapper.
-Local scripts/env.sh supports JAVA_HOME and ANDROID_HOME overrides; its
-.tooling defaults describe the development workstation, not bundled tools.
+Getting started
+---------------
 
-Embedded node
-Clone https://github.com/paulscode/lightning-fork into .deps/lightning-fork
-and check out aa3f4a4e7c1fbad1b291b5acfe83e2b362d2fd56.
-Install gomobile/gobind v0.0.0-20261011034528-197770444867.
-Run the fork's `make mobile-rpc` to generate mobile RPC bindings.
-Then run scripts/build-node.sh; it applies the tracked fee/Tor and DNS discovery patches and
-creates app/libs/Lndmobile.aar. The generated offers RPC delta from the
-original build is also preserved in patches for source provenance.
-Native AARs, generated bindings, SDKs, node data, and secrets are not in Git.
+Download the APK and SHA256SUMS from this repository's GitHub Releases page:
+https://github.com/BitcoinMechanic/xbt-wallet/releases
 
-Android
-  source scripts/env.sh
-  ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
+Requires Android 8.0/API 26 or later. The release APK is the current debug-signed
+mainnet testing build (org.xbt.wallet.mainnettest), not a production-signed
+store release. It updates the existing mainnet test app when its signing key
+matches. Do not uninstall a funded wallet to work around an installation error.
+Keep the phone wallet repository private while alpha testing continues.
 
-Regtest package: org.xbt.wallet.alpha
-Isolated mainnet package: build the same tasks with -PmainnetTest.
-Mainnet testing defaults are currently specific to the development setup;
-review Node connection settings before use. The two packages keep separate
-wallets. APK output: app/build/outputs/apk/debug/app-debug.apk.
+On first launch choose:
+- Easy mode: the phone runs the embedded XBT/BLAKE2b LND fork and synchronizes
+  through Neutrino. Initial synchronization takes time. Back up the seed, fund
+  the wallet on chain, and open a channel to use Lightning.
+- Remote Control: connect to an existing supported XBT Core Lightning node
+  using its REST connection details/QR. The phone holds connection credentials;
+  keys and channels remain on the node. This is not generic support for every
+  LND/CLN server or an invitation to enter a Lightning peer URI as a REST URL.
 
-Do not run all connected instrumentation tests against an existing wallet:
-NodeSmokeTest creates wallets. Use a disposable test environment, or select
-the explicitly read-only TorTransportTest when appropriate.
+Use a reachable HTTPS interface over Start Tunnel, VPN, or Tailscale, or an
+onion interface over the embedded Tor client. Private StartOS HTTPS certificates
+must be trusted; do not disable certificate checks. Tor can be slower.
+The mainnet build uses XBT peer discovery and mempool.guide fee estimates.
+Advanced -> Fiat configures display currency and the XBT price source.
 
-Third-party source licenses remain with their components. This repository
-contains no new blanket license grant for the application.
+StartOS requirements for swaps
+-----------------------------
 
-Lightning swap receiving (2026-11-10):
-  Lightning funds -> Receive has a top-right Swaps toggle, off by default.
-  Off: ordinary XBT invoices, including optional amounts, using the embedded
-  fork's compulsory XBT feature bit. On: enter the fixed XBT sats to receive;
-  the controller supplies a BTC Lightning invoice for the sender to pay.
-  Configure a saved controller's Wallet Receive API origin and private receive
-  key (StartOS -> Swap Setup -> Wallet Receive Access). Tor origins use the
-  app's embedded Tor client. This is a receive-only credential, not a node rune.
-  Original invoice and request state persist before network dispatch. Resume
-  via Swap requests; Retry request reuses that original invoice. Labels remain
-  attached to the wallet's XBT invoice and appear in settled payment history.
-  BTC QR validation checks network features, hash, amount and deadline. An
-  expired payment window hides the QR but does not claim the swap failed until
-  the controller reports a terminal outcome. Received XBT is verified locally.
-  The description is retained on the XBT invoice; it is not copied to the BTC
-  invoice. Swaps require a fixed amount; ordinary XBT receive does not.
-  First API supports authenticated BTC-to-XBT receiving only. Automatic swap
-  sending and public unauthenticated quote access remain future work.
+The supported self-hosted swap setup currently expects an existing StartOS
+server. The phone does not install StartOS, run the controller, or fund/open
+the controller's channels for you. Standalone Linux deployment is backlog work.
 
-  Validation: Android build/unit tests/lint; five focused Android parser and
-  Tor transport tests; explicit live Tor API authentication/status probe.
-  Controller tests cover durable retries, actual journal/worker integration,
-  status without writes, wrong identity/network/credentials and secret omission.
-  Mainnet wallet configured and updated, but funded phone receive is untested:
-  this wallet needs a channel with inbound liquidity first. No payment sent.
+Install compatible versions of these packages on the server:
+- XBT full node and XBT Core Lightning:
+  https://github.com/BitcoinMechanic/xbt-cln-startos
+- BTC/SHA256 full node and BTC Core Lightning:
+  https://github.com/BitcoinMechanic/btc-cln-startos
+- Swap Controller:
+  https://github.com/BitcoinMechanic/swap-controller-startos
 
-Two-emulator desktop testing (2026-11-10):
-  XBT:  AVD xbt-alpha, serial emulator-5554, existing funded test wallet.
-  Zeus: AVD zeus-test, serial emulator-5556, fresh Android storage.
-  Always specify adb -s emulator-5554 or -s emulator-5556; never assume the
-  default device when operating on wallet data or installing an APK.
-  XBT uses three virtual CPUs; Zeus uses two. Both request 2 GiB RAM,
-  software graphics and no snapshots (Android may raise the RAM minimum).
-  Persistent wallet data is retained. Local AVD refresh rates are back to 60 Hz.
-  The attempted 30 Hz / two-core XBT tuning worsened reported freezes and was
-  reverted. GNOME hang detection is back to its original 5000 ms timeout.
-  Zeus is temporarily stopped to isolate XBT responsiveness under lighter load.
-  Start: systemctl --user start zeus-emulator.service
-  Stop:  systemctl --user stop zeus-emulator.service
-  Desktop launcher: Zeus BTC Emulator
-  Script: scripts/run-zeus-emulator-desktop.sh
-  Installed official Zeus v13.2.4 x86_64, APK SHA256:
-  94afbea4665267d3b079163d7590ce4ed7847d1cb9475395a3c83bf045d36ba9
-  Verified signed release manifest (PGP fingerprint
-  96C225207F2137E278C31CF7AAC48DE8AB8DEE84) and APK signing certificate against
-  Zeus's published Android fingerprint. Release files are under .tooling/zeus.
-  Both emulator windows are visible side by side on the Remmina desktop.
-  Zeus is at its welcome screen; no Zeus wallet/seed or node connection created.
+Use the swap-enabled CLN packages and their compatible controller build.
+Stock marketplace CLN packages should not be assumed to provide the required
+coordinator hooks. Follow each package's installation/update instructions.
+A controller that you already trust and have access to can be on someone
+else's StartOS server; normal non-swap XBT payments do not require a controller.
 
-RBF payment replacement (2026-11-14)
+Prepare the server
+------------------
+
+1. Synchronize both full nodes and connect each CLN node to the correct chain.
+2. Fund both CLN nodes on chain. Open channels and wait until they are usable
+   and connected. Provide spendable and receivable Lightning liquidity for the
+   directions you intend to use, and retain on-chain funds for safety/fee needs.
+   Channel capacity or headline balance alone is not usable liquidity: channel
+   reserves, HTLC limits, route fees and peer connectivity also matter.
+3. Enable "Trust Local Swap Controller" on BOTH CLN nodes. This authorizes the
+   controller's scoped swap access. Suitable grants are created and renewed
+   automatically; routine swaps should not require manual grant approval.
+4. Follow the controller's first-install initialization instructions. Leave
+   Local Node Setup enabled and wait for the worker and Local Lightning Nodes
+   health checks to report ready. Do not reinitialize existing journals to
+   resolve a health error. Restored services may require explicit recovery.
+5. In Interfaces, enable phone-reachable addresses for BOTH "Wallet Discovery"
+   and "Wallet Swap API". Use the actual StartOS interface URLs, including
+   assigned ports; do not guess URLs from internal container port numbers.
+6. Under Swap Setup -> Wallet Discovery, enable publishing and configure the
+   controller name, its XBT Lightning public key, and discovery endpoint(s).
+   This public key belongs to the controller's XBT CLN node, not its BTC node
+   or the phone's wallet.
+7. Under Swap Setup -> Wallet Swap Access, enable access and obtain the private
+   wallet API access key/QR. Keep it private. Configure the provider's pricing
+   markup if desired, and review the resulting limits and fees.
+
+Discovery and wallet access are different interfaces:
+- Controller address = Wallet Discovery address. It provides read-only identity
+  and endpoint metadata; it does not authorize creating swaps.
+- Wallet Swap API address = authenticated quote/create/status/cancel interface.
+  It uses the wallet access key, not your StartOS password or a CLN admin rune.
+  The host may be the same, but ports or onion addresses can differ.
+
+Connect the phone
+-----------------
+
+1. Use a separate XBT wallet/node from the controller's own XBT coordinator.
+   The wallet may be embedded or remote-controlled; keep the two roles distinct.
+2. Open the dots menu -> Swap controllers -> Add controller.
+3. Enter or scan the Wallet Discovery address. Check the returned identity
+   against your controller and save it.
+4. Open the saved controller -> Configure wallet swap access. Enter or scan
+   its Wallet Swap API address and wallet access key, then save.
+5. Ensure the phone can reach those addresses and its own node is ready.
+   There is no bundled public controller directory; add a known controller
+   or configure a compatible discovery directory.
+
+The phone's wallet also needs Lightning liquidity: inbound to receive XBT,
+spendable outbound to send XBT. Receiving requires an online wallet/node.
+A remote-control connection does not itself create any liquidity.
+
+Receive BTC into your XBT wallet
+-------------------------------
+
+1. Lightning -> Receive -> enable Swaps.
+2. Select the configured controller and enter a fixed XBT amount to receive.
+   The currency selector converts fiat/XBT/sats locally; the target asset is XBT.
+3. Press "Create invoice (swap)". The wallet creates its XBT recipient invoice,
+   and the controller supplies a BTC Lightning invoice.
+4. Give the displayed BTC invoice to the BTC sender. Pay it only once and
+   before its expiry. The controller receives BTC and pays XBT to your wallet.
+5. Follow the saved swap request until completion. The wallet verifies receipt.
+
+With Swaps off, Receive creates an ordinary XBT invoice instead. Ordinary
+receiving supports amountless invoices; swap receiving requires a fixed amount.
+A pending receive swap is accessible through "Existing swap" and "Cancel swap".
+
+Pay a BTC Lightning invoice using XBT
 ------------------------------------
-Advanced > RBF/CPFP lists eligible unconfirmed outgoing on-chain payments.
-This first implementation performs RBF, not a CPFP fallback. It preserves all
-inputs, recipient outputs, sequences and locktime, and reduces only an unspent
-wallet-owned change output. It supports native P2WPKH/P2TR wallet inputs with
-known confirmed parents; max sends without change, funding/splice transactions,
-unknown inputs and insufficient change are excluded with an explanation.
-Non-signalling transactions require full-RBF relay policy. The confirmation
-shows the requested rate, total fee and added fee before signing/broadcast.
 
-Embedded LND uses WalletKit FinalizePsbt/PublishTransaction; remote CLN uses
-reserveinputs(exclusive=false), signpsbt and sendpsbt. Restricted remote runes
-must permit these methods. The replacement is revalidated before signing and
-submission is recorded before broadcast. An ambiguous response does not
-silently authorize another submission. CLN originals superseded by a known
-replacement or confirmed conflicting spend are excluded from selection.
+1. Obtain a fresh, fixed-amount BTC invoice from the recipient. For private
+   recipient channels, include usable route hints and keep that node online.
+2. Lightning -> Send: paste or scan the BTC invoice.
+3. Select/configure the controller if prompted. Review the quoted XBT cost,
+   fees, market-rate comparison and expiry. A cost more than 5% above market triggers
+   the wallet's additional warning.
+4. Accept the quote and confirm payment of the controller's XBT invoice.
+   The controller receives XBT and pays the original BTC recipient.
+5. Follow the saved request to its terminal result. Normal operation requires
+   no per-payment actions in StartOS.
 
-Validation: ReplacementTransactionTest and ClnRemoteContractTest (14 tests),
-plus real disposable XBT regtest LND and CLN replacement broadcasts. Both
-originals were evicted, replacements confirmed, and recipient outputs preserved.
-No mainnet funds or channels were used. Regtest harness/results are under the
-ignored .tooling/rbf-regtest directory; optional device fixtures are isolated to
-org.xbt.wallet.profiletest.
+Current outgoing swaps require an amount-bearing BTC invoice. An amountless
+BTC invoice is not made swappable merely by entering an amount in the wallet.
 
-Channel backup export and testing (2026-11-14)
----------------------------------------------
-Advanced contains Test seed recovery, Create channel backup, and Test channel
-backup. Export uses Android's document picker; pending export files stay in
-private app cache and are removed on completion/cancel. Seed/hsm_secret is not
-included. Keep it separately and refresh channel backups after channel changes.
+Status, cancellation and troubleshooting
+---------------------------------------
 
-Embedded exports are native LND encrypted multi-channel .backup files. The
-read-only test calls VerifyChanBackup and compares decrypted channel points
-against a fresh export. Remote CLN exports are JSON containing format/version,
-network, node_id, created_at, scb[], and a checksum. For CLN recovery tooling,
-scb[] is the array returned by staticbackup; this is not emergency.recover's
-binary format. Its test checks corruption/metadata and compares entries with
-staticbackup from the connected node. The checksum is not authentication, and
-mismatched older entries cannot be certified recoverable by this comparison.
+Use Swap requests to resume saved requests after a lost reply. A timeout is
+not proof that a request or payment failed. Do not create another payment
+just because a response was lost; inspect the existing request first.
+Cancellation is only available where the controller can safely accept it.
+"Cancelling" is not final: authority/HTLC cleanup can continue until expiry.
+Clearing finished requests from the UI does not reverse a payment.
 
-Neither test invokes restoreChannelBackups/recoverchannel, closes channels,
-or proves that peers will cooperate. Recovery import is not implemented in
-this app. CLN node backups must also preserve the matching hsm_secret.
+If a swap is refused, retain its diagnostic code/reference and inspect node
+health, spendable/receivable liquidity, channel reserves, route hints, invoice
+expiry and the controller's grant/fee/delay limits. A large XBT amount may
+convert to a BTC amount below the incoming channel's safety threshold.
+Do not erase journals, remove funded services or reset authority as a workaround.
 
-Validation: five Android file/coverage/export tests passed. A disposable XBT
-regtest channel stayed open while LND exported/verified its real backup and
-rejected a corrupted copy; CLN staticbackup entries matched across exports.
+The controller has bounded journal/history and concurrency limits. Automatic
+renewal does not eliminate those limits; unattended long-term maintenance
+remains work in progress. Recovery/deadline protection can force-close channels.
+Keep node/controller backups and follow their recovery instructions.
 
-App PIN lock
-------------
-Advanced -> Add a PIN code configures an app-wide 6-12 digit PIN.
-The inactivity timeout defaults to 15 minutes; separate dropdowns select
-1–60 seconds, minutes, hours, or days. Restart-only disables inactivity locking
-and greys out the timeout controls while retaining their selection. Background time counts;
-a fresh app process always starts locked. The node keeps monitoring channels.
-Change/remove requires the current PIN. Incorrect attempts are persistently
-throttled after five failures. The stored verifier uses salted PBKDF2-HMAC-SHA256
-(120,000 iterations), then an Android Keystore HMAC key; the PIN is not stored.
-This is an app access lock, not additional encryption of the node wallet.
-There is no forgotten-PIN reset: retain seed/channel backups or remote-node
-connection information. In-app seed restoration remains backlog work.
+Backups and app security
+-----------------------
+
+Advanced -> Backup/Recover groups seed backup, Test seed recovery, Create
+channel backup and Test channel backup. Remote wallets must back up their
+seed/node data on the remote node. Backup tests are non-destructive checks,
+not a guarantee of full recovery. Channel recovery relies on peers and can
+close channels; seed words alone do not restore live Lightning channels.
+
+Advanced -> Add a PIN code enables an app-wide 6–12 digit access lock.
+Default inactivity timeout: 15 minutes. Choose a number and seconds/minutes/
+hours/days, or "Only require PIN on restart". There is no forgotten-PIN reset.
+The node keeps monitoring while the UI is locked; this PIN is not additional
+encryption of the node wallet. Secure your recovery information before enabling it.
+
+Building and testing
+--------------------
+
+JDK 25, Go 1.27.3, Android SDK platform 37.1 / Build Tools 36.0.0,
+NDK 27.2.12479018, protoc and the fork's protobuf tools are required.
+The checksum-pinned wrapper supplies Gradle 9.6.0.
+
+Clone https://github.com/paulscode/lightning-fork into .deps/lightning-fork
+at aa3f4a4e7c1fbad1b291b5acfe83e2b362d2fd56. Install gomobile/gobind
+v0.0.0-20261011034528-197770444867, run the fork's "make mobile-rpc", then
+scripts/build-node.sh. This applies the tracked patches and creates
+app/libs/Lndmobile.aar. Generated native binaries and SDKs are not in Git.
+
+  source scripts/env.sh
+  ./gradlew -PmainnetTest testDebugUnitTest assembleDebug
+
+APK: app/build/outputs/apk/debug/app-debug.apk
+Omitting -PmainnetTest builds the separate regtest app org.xbt.wallet.alpha.
+-PisolatedTest uses org.xbt.wallet.profiletest for disposable instrumentation.
+Never run the entire connected test suite against a funded wallet: some tests
+create wallets. BUILD.txt and docs/development-history.txt contain historical
+checkpoints, not current end-user setup instructions.
+
+Source components retain their licenses. Source Sans 3's OFL license is bundled
+under app/src/main/assets/licenses. There is no new blanket license grant for
+the application. Known work and recovery limitations are tracked in SCOPE.md.

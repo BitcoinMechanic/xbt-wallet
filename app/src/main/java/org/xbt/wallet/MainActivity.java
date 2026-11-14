@@ -92,7 +92,7 @@ public final class MainActivity extends Activity {
         TextView title = titleId == 0 ? null : dialog.findViewById(titleId);
         if (title != null) {
             title.setTextColor(0xfff2e6ce); title.setTextSize(20);
-            title.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.BOLD);
+            title.setTypeface(getResources().getFont(R.font.wallet_humanist), android.graphics.Typeface.BOLD);
         }
         // Replace the platform button bar with the same equally sized actions as custom forms.
         List<Button> buttons = new ArrayList<>();
@@ -146,6 +146,8 @@ public final class MainActivity extends Activity {
             case "Swap controllers": return this::swapControllers;
             case "Search controllers": return this::controllerSearch;
             case "Advanced": return this::advanced;
+            case "Fiat": return this::fiatSettings;
+            case "About": return this::about;
             case "PIN code": return this::pinSettings;
             case "Backup/Recover": return this::backupRecover;
             case "Customization": return this::customization;
@@ -335,7 +337,9 @@ public final class MainActivity extends Activity {
     private void page(String title, boolean sensitive) {
         page(title, sensitive, pageRoute(title));
     }
+    private int pageSurfaceIndex;
     private void page(String title, boolean sensitive, Runnable restore) {
+        pageSurfaceIndex = 0;
         boolean changedTitle = !title.equals(screen);
         if (title.equals("Starting...") && changedTitle) startingRevealAt = android.os.SystemClock.elapsedRealtime();
         recordNavigation(title, restore);
@@ -492,7 +496,7 @@ public final class MainActivity extends Activity {
             heading.setLineSpacing(dp(3), 1f);
             page.addView(heading, new LinearLayout.LayoutParams(-1, -2));
             heading.setTextSize(28);
-            heading.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD));
+            heading.setTypeface(getResources().getFont(R.font.source_sans_semibold));
             heading.setPadding(0, 0, 0, dp(20));
             revealOnboardingTitle(heading);
         }
@@ -557,11 +561,13 @@ public final class MainActivity extends Activity {
     }
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private android.graphics.drawable.Drawable surface(int color, int radius, int border) {
-        return new PaperDrawable(color, radius, border, false);
+        // Rebuilding this page for fresh balances must reproduce the same finishes.
+        long seed = ((long)screen.hashCode() << 32) ^ pageSurfaceIndex++;
+        return new PaperDrawable(color, radius, border, false, seed);
     }
     private void styleButton(Button button, boolean accent) {
         button.setAllCaps(false); button.setTextSize(15);
-        button.setTypeface(android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL));
+        button.setTypeface(getResources().getFont(R.font.wallet_humanist));
         button.setTextColor(new android.content.res.ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
             new int[]{0xff8c8270, accent ? 0xfff5e7ce : 0xffedddbc}));
         button.setMinHeight(dp(52)); button.setMinimumHeight(dp(52)); button.setMinWidth(0); button.setMinimumWidth(0);
@@ -691,7 +697,7 @@ public final class MainActivity extends Activity {
         LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(20), dp(20), dp(20), dp(20));
         TextView heading = new TextView(this); heading.setText(pageTitleCase(title)); heading.setTextSize(20);
-        heading.setTextColor(0xfff2e6ce); heading.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.BOLD);
+        heading.setTextColor(0xfff2e6ce); heading.setTypeface(getResources().getFont(R.font.wallet_humanist), android.graphics.Typeface.BOLD);
         heading.setPadding(0, 0, 0, dp(16)); form.addView(heading);
         ScrollView scroll = new ScrollView(this);
         TextView details = new TextView(this); details.setText(message); details.setTextSize(15);
@@ -1113,7 +1119,8 @@ public final class MainActivity extends Activity {
                 for (LightningOuterClass.PendingChannelsResponse.ClosedChannel c : pending.getPendingClosingChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 for (LightningOuterClass.PendingChannelsResponse.ForceClosedChannel c : pending.getPendingForceClosingChannelsList()) hasPublic |= !c.getChannel().getPrivate();
                 for (LightningOuterClass.PendingChannelsResponse.WaitingCloseChannel c : pending.getWaitingCloseChannelsList()) hasPublic |= !c.getChannel().getPrivate();
-                if (hasPublic) text("Required on-chain reserve: " + displayAmount(balance.getReservedBalanceAnchorChan()));
+                if (hasPublic && !node.isRemote() && balance.getReservedBalanceAnchorChan() > 0)
+                    text("Required on-chain reserve: " + displayAmount(balance.getReservedBalanceAnchorChan()));
                 homeScanButton();
                 homeChannelStatus(active, pending, connectedPeers, Integer.toUnsignedLong(info.getBlockHeight()));
                 page.setOnClickListener(v -> {
@@ -1721,7 +1728,7 @@ public final class MainActivity extends Activity {
             catch (Exception e) { error(e); }
         });
         text("This setting changes fiat valuation only. Swap market comparisons currently use Neoxa’s XBT/BTC market.");
-        button("Back", this::advanced);
+        button("Back", this::fiatSettings);
     }
     private void fiatCurrency() {
         String selected = prefs.getString("fiat-currency", "USD");
@@ -1742,6 +1749,7 @@ public final class MainActivity extends Activity {
                 updateHeaderRate();
                 if (prefs.getBoolean("header-fiat-rate", false) && which != 0) fetchFiatRates();
                 dialog.dismiss();
+                if (screen.equals("Fiat")) fiatSettings();
             }).setNegativeButton("Cancel", null).show();
     }
     private void animateHomeActions(int index, boolean expanded) {
@@ -1912,7 +1920,7 @@ public final class MainActivity extends Activity {
         form.setPadding(dp(20), dp(20), dp(20), dp(20));
         form.setFocusableInTouchMode(true);
         TextView title = new TextView(this); title.setText("Label channel"); title.setTextSize(20);
-        title.setTextColor(0xfff2e6ce); title.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.BOLD);
+        title.setTextColor(0xfff2e6ce); title.setTypeface(getResources().getFont(R.font.wallet_humanist), android.graphics.Typeface.BOLD);
         title.setPadding(0, 0, 0, dp(16)); form.addView(title);
         TextView caption = new TextView(this); caption.setText("Label"); caption.setTextSize(15);
         caption.setTextColor(0xffc2b69f); form.addView(caption);
@@ -2473,15 +2481,36 @@ public final class MainActivity extends Activity {
         if (!walletName.isEmpty()) text("Wallet name: " + walletName);
         text(node == null ? "Node disconnected" : node.status);
         button(node != null && node.isRemote() ? "Remote Control connection" : "Node connection", node != null && node.isRemote() ? this::remoteConnection : this::nodeConnection);
-        button("Fiat price source", this::fiatPriceSource);
+        button("Fiat", this::fiatSettings);
         button("RBF/CPFP", this::feeBumps);
-        button("Fiat currency: " + prefs.getString("fiat-currency", "USD"), this::fiatCurrency);
         button("Backup/Recover", this::backupRecover);
         button("Customization", this::customization);
         button(WalletPin.enabled(this) ? "PIN code" : "Add a PIN code", this::pinSettings);
         button("Peers", this::peerList);
         button("Create BOLT12", this::createBolt12);
-        button("Closed-channel history", this::closedChannels); button("Home", this::home);
+        button("Closed-channel history", this::closedChannels);
+        button("About", this::about);
+        button("Home", this::home);
+    }
+    private void fiatSettings() {
+        page("Fiat");
+        button("Fiat price source", this::fiatPriceSource);
+        button("Fiat currency: " + prefs.getString("fiat-currency", "USD"), this::fiatCurrency);
+        button("Back", this::advanced);
+    }
+    private void about() {
+        page("About");
+        text("XBT Wallet");
+        text("Version " + BuildConfig.VERSION_NAME + " (build " + BuildConfig.VERSION_CODE + ")");
+        button("GitHub repository", () -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://github.com/BitcoinMechanic/xbt-wallet")));
+            } catch (ActivityNotFoundException e) {
+                error(new Exception("No browser is installed. Repository: https://github.com/BitcoinMechanic/xbt-wallet"));
+            }
+        });
+        button("Back", this::advanced);
     }
     private EditText pinField(String hint) {
         EditText input=field(hint,""); input.setInputType(18); input.setSaveEnabled(false);
@@ -2695,7 +2724,7 @@ public final class MainActivity extends Activity {
     private void customization() {
         page("Customization");
         Switch coin=new Switch(this);
-        coin.setText("Show coin"); coin.setTextSize(15); coin.setTextColor(0xffedddbc);
+        coin.setText("Show Bitcoin"); coin.setTextSize(15); coin.setTextColor(0xffedddbc);
         coin.setPadding(dp(14),dp(12),dp(14),dp(12)); coin.setMinimumHeight(dp(52));
         coin.setChecked(prefs.getBoolean("header-show-coin",true));
         coin.setOnCheckedChangeListener((view,checked)->{
@@ -2705,7 +2734,7 @@ public final class MainActivity extends Activity {
         });
         page.addView(coin,new LinearLayout.LayoutParams(-1,-2));
         Switch receivable = new Switch(this);
-        receivable.setText("Show Receivable");
+        receivable.setText("Show funds receivable in Lightning");
         receivable.setTextSize(15);
         receivable.setTextColor(0xffedddbc);
         receivable.setPadding(dp(14), dp(12), dp(14), dp(12));
@@ -2901,7 +2930,7 @@ public final class MainActivity extends Activity {
             final int tab = i;
             Button button = new Button(this); styleButton(button, historyTab == i); button.setText(names[i]); button.setTextSize(13);
             button.setSelected(historyTab == i);
-            button.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), historyTab == i ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+            button.setTypeface(getResources().getFont(R.font.wallet_humanist), historyTab == i ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
             button.setTextColor(historyTab == i ? 0xfff5e7ce : 0xffc2b69f);
             button.setContentDescription(names[i] + (historyTab == i ? ", selected" : ""));
             button.setPadding(dp(4), dp(12), dp(4), dp(12));
@@ -3516,7 +3545,7 @@ public final class MainActivity extends Activity {
             Button toggle = button("Expiration (default 1hr) ▾", () -> {});
             toggle.setBackground(null); toggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
             toggle.setTextColor(0xffc2b69f);
-            toggle.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.NORMAL);
+            toggle.setTypeface(getResources().getFont(R.font.wallet_humanist), android.graphics.Typeface.NORMAL);
             count = field("Number", prefs.getString("receive-expiration-count", "1"));
             page.removeView(count);
             count.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
@@ -3565,7 +3594,7 @@ public final class MainActivity extends Activity {
             Button toggle = button("Advanced ▾", () -> {});
             toggle.setBackground(null); toggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
             toggle.setTextColor(0xffc2b69f);
-            toggle.setTypeface(android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL), android.graphics.Typeface.NORMAL);
+            toggle.setTypeface(getResources().getFont(R.font.wallet_humanist), android.graphics.Typeface.NORMAL);
             hints.setText("Include route hints"); hints.setChecked(true);
             blinded.setText("Blinded paths"); blinded.setChecked(false);
             fields.addView(hints); fields.addView(blinded);

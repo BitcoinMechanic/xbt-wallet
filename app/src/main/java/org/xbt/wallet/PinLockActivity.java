@@ -14,7 +14,7 @@ public final class PinLockActivity extends Activity {
         panel.setGravity(Gravity.CENTER); int pad=Math.round(28*getResources().getDisplayMetrics().density);
         panel.setPadding(pad,pad,pad,pad); panel.setBackground(new PaperBackgroundDrawable());
         OnboardingTitleView title=new OnboardingTitleView(this); title.setText("Wallet Locked");
-        title.setTextSize(28); title.setTypeface(android.graphics.Typeface.DEFAULT,1); panel.addView(title);
+        title.setTextSize(28); title.setTypeface(getResources().getFont(R.font.source_sans_semibold)); panel.addView(title);
         EditText pin=new EditText(this); pin.setHint("PIN"); pin.setTextColor(0xffedddbc);
         pin.setInputType(18); pin.setSingleLine(true); pin.setSaveEnabled(false);
         pin.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);

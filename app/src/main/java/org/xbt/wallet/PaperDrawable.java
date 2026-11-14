@@ -8,10 +8,8 @@ import java.util.Random;
 /** Stationary, cached paper grain with softly worn edges. No per-frame texture generation. */
 public class PaperDrawable extends Drawable {
     private static final Bitmap GRAIN = makeGrain();
-    private static final java.util.concurrent.atomic.AtomicLong SURFACES =
-            new java.util.concurrent.atomic.AtomicLong(0x584254);
-    // Fixed for this surface's lifetime: redraws and layout never shuffle the finish.
-    private final long finishSeed = SURFACES.getAndIncrement();
+    // Stable identity supplied by the page, not allocation order across refreshes.
+    private final long finishSeed;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint grain = new Paint(Paint.FILTER_BITMAP_FLAG);
@@ -24,11 +22,15 @@ public class PaperDrawable extends Drawable {
     private Shader wash, edge, glow;
 
     /** XML constructor for the dots menu. */
-    public PaperDrawable() { this(0xff28231c, 18, 0xff81694b, false, true); }
+    public PaperDrawable() { this(0xff28231c, 18, 0xff81694b, false, true, 0x504f505550L); }
     public PaperDrawable(int color, int radius, int border, boolean background) {
-        this(color, radius, border, background, false);
+        this(color, radius, border, background, false, 0x584254L);
     }
-    private PaperDrawable(int color, int radius, int border, boolean background, boolean popupPadding) {
+    public PaperDrawable(int color, int radius, int border, boolean background, long finishSeed) {
+        this(color, radius, border, background, false, finishSeed);
+    }
+    private PaperDrawable(int color, int radius, int border, boolean background, boolean popupPadding, long finishSeed) {
+        this.finishSeed = finishSeed;
         this.color = color; this.border = border; this.background = background; this.popupPadding = popupPadding;
         density = Resources.getSystem().getDisplayMetrics().density;
         this.radius = radius * density;
