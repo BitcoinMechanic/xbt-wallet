@@ -1,0 +1,6 @@
+# Build provenance; no credentials or generated native binaries belong here.
+lightning-fork https://github.com/paulscode/lightning-fork aa3f4a4e7c1fbad1b291b5acfe83e2b362d2fd56
+go 1.27.3
+gomobile golang.org/x/mobile v0.0.0-20261011034528-197770444867
+falafel github.com/lightninglabs/falafel v0.9.2
+goimports golang.org/x/tools v0.37.0

@@ -17,3 +17,11 @@ app/libs/*-sources.jar
 wallet.db
 channel.db
 *.log
+ios/Frameworks/
+ios/DerivedData/
+*.xcarchive
+*.ipa
+**/xcuserdata/
+ios/XBTWallet.xcodeproj/
+ios/TestResults.xcresult/
+ios/XBTWallet/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png

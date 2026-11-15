@@ -1,0 +1,46 @@
+name: XBTWallet
+options:
+  bundleIdPrefix: org.xbt
+  deploymentTarget:
+    iOS: '16.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    TARGETED_DEVICE_FAMILY: '1,2'
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
+targets:
+  XBTWallet:
+    type: application
+    platform: iOS
+    sources: [XBTWallet]
+    dependencies:
+      - framework: Frameworks/Lndmobile.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.xbt.wallet.ios
+        INFOPLIST_FILE: XBTWallet/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        OTHER_LDFLAGS: ['$(inherited)', '-lresolv']
+    scheme:
+      testTargets: [XBTWalletTests, XBTWalletUITests]
+  XBTWalletTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [XBTWalletTests]
+    dependencies:
+      - target: XBTWallet
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  XBTWalletUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [XBTWalletUITests]
+    dependencies:
+      - target: XBTWallet
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES

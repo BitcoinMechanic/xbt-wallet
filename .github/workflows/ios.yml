@@ -1,0 +1,70 @@
+name: iPhone build
+on:
+  workflow_dispatch:
+  push:
+    branches: [ios-port]
+    paths: ['ios/**', 'scripts/build-ios*', 'scripts/render-ios-icon.swift', 'patches/**', '.github/workflows/ios.yml']
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: ios/Native/dependencies.lock
+      - name: Install protobuf compiler
+        run: brew install protobuf xcodegen
+      - uses: actions/cache/restore@v4
+        id: engine-cache
+        with:
+          path: ios/Frameworks/Lndmobile.xcframework
+          key: ios-engine-${{ runner.arch }}-${{ hashFiles('ios/Native/**', 'scripts/build-ios-node.sh', 'patches/**') }}
+      - name: Build the pinned XBT Lightning engine for iPhone and simulator
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: scripts/build-ios-node.sh
+      - uses: actions/cache/save@v4
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        with:
+          path: ios/Frameworks/Lndmobile.xcframework
+          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lndmobile-xcframework
+          path: ios/Frameworks/Lndmobile.xcframework
+          retention-days: 7
+      - name: Generate Xcode project
+        working-directory: ios
+        run: |
+          swift ../scripts/render-ios-icon.swift XBTWallet/Resources/Assets.xcassets/xbt_logo.imageset/xbt_logo.png XBTWallet/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
+          xcodegen generate
+      - name: Compile unsigned iPhone app
+        working-directory: ios
+        run: xcodebuild -project XBTWallet.xcodeproj -scheme XBTWallet -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath DerivedData -archivePath XBTWallet.xcarchive CODE_SIGNING_ALLOWED=NO archive
+      - name: Test on iPhone simulator
+        working-directory: ios
+        run: |
+          device_id=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; ds=json.load(sys.stdin)["devices"]; print(next(d["udid"] for group in ds.values() for d in group if "iPhone" in d["name"]))')
+          xcodebuild -project XBTWallet.xcodeproj -scheme XBTWallet -configuration Debug -destination "platform=iOS Simulator,id=$device_id" -derivedDataPath DerivedData -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO test
+      - name: Package app bundles preserving executable permissions
+        if: always()
+        working-directory: ios
+        run: |
+          if [ -d XBTWallet.xcarchive ]; then
+            tar -czf XBTWallet-unsigned.xcarchive.tar.gz XBTWallet.xcarchive
+          fi
+          if [ -d DerivedData/Build/Products/Debug-iphonesimulator/XBTWallet.app ]; then
+            tar -czf XBTWallet-simulator.tar.gz -C DerivedData/Build/Products/Debug-iphonesimulator XBTWallet.app
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iPhone-build-and-tests
+          path: |
+            ios/XBTWallet-unsigned.xcarchive.tar.gz
+            ios/XBTWallet-simulator.tar.gz
+            ios/TestResults.xcresult
+          retention-days: 14
