@@ -89,8 +89,8 @@ final class SwapControllers {
                 case "wallet_receive_not_found" -> "The controller has not recorded this request. Use Retry request to resume with the same invoice.";
                 case "service_previous_swap_active" -> "This controller is still handling another swap in this direction. Wait for it to finish.";
                 case "market_unavailable", "market_data_invalid" -> "The controller could not obtain valid, fresh Neoxa pricing. No new quote was approved.";
-                case "recipient_invoice_limits" -> "The node rejected the recipient invoice limits. Updated node builds accept positive recipient invoices up to 10,000,000 XBT sats or 1,000,000 BTC sats; controller pricing and grant limits may be lower. Older builds may still enforce the 1,000,000-sat XBT limit. Older builds also use this code for an invoice timelock above 40 blocks. If the amount is within range, check the node version and decoded invoice; this code alone does not identify the failed limit.";
-                case "market_amount_limit" -> "This swap exceeds the controller’s quote limits (up to 10,000,000 XBT sats and 100,000 BTC sats, including applicable costs). Use a smaller invoice.";
+                case "recipient_invoice_limits" -> "The node rejected the invoice amount. Update both Lightning nodes if they still enforce the old fixed amount ceilings. Check the decoded invoice and node diagnostics.";
+                case "market_amount_limit" -> "The controller rejected the quote amount. Older controllers enforce fixed amount ceilings; update the controller and both Lightning nodes. Check the controller diagnostics for the rejected amount.";
                 case "market_depth_unavailable" -> "Neoxa’s order book has insufficient depth within the controller’s price limits for this amount.";
                 case "service_review_superseded" -> "The controller’s node pairing changed since this quote was created. Cancel the unapproved quote and request a fresh invoice.";
                 case "service_pairing_required" -> "The controller has not paired its Lightning nodes.";
